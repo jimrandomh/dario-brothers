@@ -1,0 +1,92 @@
+.shell-root {
+  position: absolute;
+  inset: 0;
+  background: #05070a;
+  padding: 6px 0 6px 10px;
+  overflow: hidden;
+}
+
+.shell-root .term {
+  zoom: var(--ui);
+  height: 100%;
+  overflow-y: auto;
+  padding-right: 12px;
+  font-family: var(--font-mono);
+  font-size: 13.5px;
+  line-height: 1.45;
+  color: #c4d0dd;
+  scrollbar-width: thin;
+  scrollbar-color: #223 transparent;
+  cursor: text;
+}
+
+.shell-root .term-line {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.shell-root .term-input {
+  display: flex;
+  flex-wrap: wrap;
+}
+
+.shell-root .term-cursor {
+  background: #c4d0dd;
+  color: #05070a;
+  animation: shell-blink 1.05s steps(1) infinite;
+  white-space: pre;
+}
+
+@keyframes shell-blink {
+  50% {
+    background: transparent;
+    color: inherit;
+  }
+}
+
+/* prompt + output colors */
+.shell-root .c-user {
+  color: #6bff9e;
+}
+.shell-root .c-host {
+  color: #6bff9e;
+}
+.shell-root .c-path {
+  color: #7fbfff;
+}
+.shell-root .c-sym {
+  color: #66758a;
+}
+.shell-root .c-dir {
+  color: #7fbfff;
+  font-weight: 600;
+}
+.shell-root .c-exec {
+  color: #6bff9e;
+}
+.shell-root .c-bin {
+  color: #c98bff;
+}
+.shell-root .c-cmd {
+  color: #cfe3ff;
+}
+.shell-root .c-dim {
+  color: #5b6a7d;
+}
+.shell-root .c-err {
+  color: #ff6b6b;
+}
+.shell-root .c-warn {
+  color: #ffb347;
+}
+.shell-root .c-ok {
+  color: #6bff9e;
+}
+.shell-root .c-coin {
+  color: #ffd23f;
+  font-weight: 600;
+}
+.shell-root .c-match {
+  color: #05070a;
+  background: #ffd23f;
+}
