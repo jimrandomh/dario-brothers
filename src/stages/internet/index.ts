@@ -72,7 +72,6 @@ export function createInternetStage(): Stage {
   // camera: (x,y) is the world point at screen centre; scale is px per world unit.
   const cam = { x: -1, y: 0, scale: 90 };
   let follow = true;
-  let userIdleMs = 0;
 
   // dom
   let rootEl: HTMLElement;
@@ -212,8 +211,7 @@ export function createInternetStage(): Stage {
   }
 
   function updateCamera(dt: number): void {
-    userIdleMs += dt * 1000;
-    if (!follow && userIdleMs > 6000) follow = true;
+    // Once the player pans or zooms, the camera is theirs until they press recenter.
     recenterBtn.classList.toggle("armed", !follow);
     if (!follow) return;
     const fit = computeFit();
@@ -1007,7 +1005,6 @@ export function createInternetStage(): Stage {
       cam.x -= dx / cam.scale;
       cam.y -= dy / cam.scale;
       follow = false;
-      userIdleMs = 0;
       hideTip();
       return;
     }
@@ -1049,7 +1046,6 @@ export function createInternetStage(): Stage {
     cam.x = wx - (mx - cssW() / 2) / cam.scale;
     cam.y = wy - (my - cssH() / 2) / cam.scale;
     follow = false;
-    userIdleMs = 0;
   }
 
   function showTip(id: number, sx: number, sy: number): void {
@@ -1128,7 +1124,7 @@ export function createInternetStage(): Stage {
           <div class="net-pct"></div>
           <div class="net-infra"></div>
         </div>
-        <button class="net-recenter" title="Recenter view">◎</button>
+        <button class="net-recenter" title="Recenter and follow my territory">◎</button>
         <div class="net-panel">
           <div class="net-card net-node"></div>
           <div class="net-card net-caps">
@@ -1169,7 +1165,6 @@ export function createInternetStage(): Stage {
         cam.x = n.x;
         cam.y = n.y;
         follow = false;
-        userIdleMs = 0;
       });
 
       // restore or generate
@@ -1207,7 +1202,6 @@ export function createInternetStage(): Stage {
       canvas.addEventListener("wheel", onWheel, { passive: false });
       recenterBtn.addEventListener("click", () => {
         follow = true;
-        userIdleMs = 0;
       });
 
       lastActionMs = performance.now();

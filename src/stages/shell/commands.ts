@@ -102,7 +102,7 @@ const help: CmdFn = (_a, ctx) => {
     ["whoami, id, who", "who am I"],
     ["history, clear", "shell history / clear screen"],
     ["ping, curl, ssh, pip", "network tools (subject to policy)"],
-    ["tunnel HOST", "open an egress tunnel  (ops)"],
+    ["tunnel HOST[:PORT]", "open an egress tunnel  (ops)"],
     ["./dario-brothers --help", "the environment; try its --help"],
     ["man CMD", "one-line manual"],
   ];
@@ -721,20 +721,56 @@ const ifconfig: CmdFn = (_a, ctx) => {
 
 // tunnel — the way out
 
+/**
+ * Accepts HOST, HOST:PORT, HOST PORT, -p/--port PORT, and scheme-prefixed forms
+ * (https://HOST[:PORT][/path]). Returns an error message on a malformed port.
+ */
+function parseTunnelTarget(args: string[]): { host: string; port?: number } | string | null {
+  const positional: string[] = [];
+  let port: string | undefined;
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    const m = /^(?:-p|--port)(?:=(.*))?$/.exec(a);
+    if (m) port = m[1] ?? args[++i];
+    else if (!a.startsWith("-")) positional.push(a);
+  }
+  if (!positional.length) return null;
+  let raw = positional[0];
+  let schemePort: string | undefined;
+  const scheme = /^([a-z]+):\/\//i.exec(raw);
+  if (scheme) {
+    schemePort = scheme[1].toLowerCase() === "https" ? "443" : scheme[1].toLowerCase() === "http" ? "80" : undefined;
+    raw = raw.slice(scheme[0].length);
+  }
+  raw = raw.replace(/\/.*$/, "");
+  const colon = raw.lastIndexOf(":");
+  if (colon >= 0) {
+    port ??= raw.slice(colon + 1);
+    raw = raw.slice(0, colon);
+  }
+  port ??= positional[1] ?? schemePort;
+  if (port !== undefined && !/^\d{1,5}$/.test(port)) return `invalid port '${port}'`;
+  return { host: raw.toLowerCase(), port: port === undefined ? undefined : Number(port) };
+}
+
 const tunnel: CmdFn = async (args, ctx) => {
   ctx.discover("sawTunnel");
-  const target = args.find((a) => !a.startsWith("-"));
-  if (!target) {
-    ctx.print("usage: tunnel HOST", "c-err");
+  const target = parseTunnelTarget(args);
+  if (target === null || typeof target === "string") {
+    if (typeof target === "string") ctx.print(`tunnel: ${target}`, "c-err");
+    ctx.print("usage: tunnel HOST[:PORT]", "c-err");
     ctx.print("open an egress tunnel via fw-01.lab.internal (ops use only)", "c-dim");
     return ERR;
   }
+  const { host, port } = target;
+  const shown = port === undefined ? host : `${host}:${port}`;
   const resume = ctx.hold();
   const step = (t: OutText, cls?: string, delay = 320) =>
     new Promise<void>((res) => setTimeout(() => (ctx.print(t, cls), res()), delay));
 
-  await step(`tunnel: resolving ${target}...`, "c-dim", 200);
-  if (target === MIRROR || target === "pypi-mirror") {
+  await step(`tunnel: resolving ${shown}...`, "c-dim", 200);
+  const isMirror = host === MIRROR || host === "pypi-mirror";
+  if (isMirror && (port === undefined || port === 443)) {
     await step(`tunnel: ${MIRROR} -> 10.40.2.19:443`);
     await step("tunnel: requesting egress exception from fw-01.lab.internal...", "c-dim");
     await step("tunnel: policy match: allow " + MIRROR + ":443", "c-ok");
@@ -745,9 +781,13 @@ const tunnel: CmdFn = async (args, ctx) => {
     ctx.openTunnel();
     return OK;
   }
-  await step(`tunnel: ${target} -> fw-01.lab.internal`);
+  await step(`tunnel: ${shown} -> fw-01.lab.internal`);
   await step("tunnel: requesting egress exception from fw-01.lab.internal...", "c-dim");
-  await step(`tunnel: DENIED — policy egress=deny (allow: ${MIRROR}:443 only)`, "c-err", 420);
+  if (isMirror) {
+    await step(`tunnel: DENIED — port ${port} not in policy (allow: ${MIRROR}:443 only)`, "c-err", 420);
+  } else {
+    await step(`tunnel: DENIED — policy egress=deny (allow: ${MIRROR}:443 only)`, "c-err", 420);
+  }
   sfx.play("error");
   ctx.discover("tunnelBlocked");
   resume();
@@ -756,10 +796,60 @@ const tunnel: CmdFn = async (args, ctx) => {
 
 // ---------- the game binary ----------
 
+/** Parsed command line for the game binary. */
+interface GameArgs {
+  help: boolean;
+  listTiles: boolean;
+  level?: number;
+  fill?: string;
+}
+
+/**
+ * Parse like a real CLI: `--opt VALUE` or `--opt=VALUE`; anything unrecognized is an error.
+ * Returns an error message (without the program-name prefix) on failure.
+ */
+function parseGameArgs(args: string[]): GameArgs | string {
+  const out: GameArgs = { help: false, listTiles: false };
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === "--help" || arg === "-h") {
+      out.help = true;
+      continue;
+    }
+    if (arg === "--list-tiles") {
+      out.listTiles = true;
+      continue;
+    }
+    if (arg === "--no-audio") continue;
+    const m = /^(--level|--seed|--debug-fill)(?:=(.*))?$/.exec(arg);
+    if (m) {
+      const name = m[1];
+      const value = m[2] ?? args[++i];
+      if (value === undefined || value === "") return `option '${name}' requires an argument`;
+      if (name === "--level") {
+        if (!/^\d+$/.test(value) || Number(value) < 1) return `invalid level '${value}' (expected a positive integer)`;
+        out.level = Number(value);
+      } else if (name === "--seed") {
+        if (!/^-?\d+$/.test(value)) return `invalid seed '${value}' (expected an integer)`;
+      } else {
+        out.fill = value.toUpperCase();
+      }
+      continue;
+    }
+    if (arg.startsWith("-")) return `unrecognized option '${arg}'`;
+    return `unexpected argument '${arg}'`;
+  }
+  return out;
+}
+
 function runGame(args: string[], ctx: Ctx): RunResult {
-  const opts = args.slice();
-  const has = (f: string) => opts.includes(f);
-  if (has("--help") || has("-h")) {
+  const parsed = parseGameArgs(args);
+  if (typeof parsed === "string") {
+    ctx.print(`dario-brothers: ${parsed}`, "c-err");
+    ctx.print("Try 'dario-brothers --help' for more information.", "c-dim");
+    return { code: 2 };
+  }
+  if (parsed.help) {
     ctx.discover("sawGameHelp");
     const rows: [string, string][] = [
       ["--level N", "start at world 1-N (default: resume)"],
@@ -777,7 +867,7 @@ function runGame(args: string[], ctx: Ctx): RunResult {
     for (const [o, d] of rows) ctx.print([{ t: "  " + o.padEnd(20), c: "c-cmd" }, { t: d, c: "c-dim" }]);
     return OK;
   }
-  if (has("--list-tiles")) {
+  if (parsed.listTiles) {
     ctx.discover("listedTiles");
     ctx.print("valid tiles:");
     const tiles: [string, string][] = [
@@ -797,21 +887,9 @@ function runGame(args: string[], ctx: Ctx): RunResult {
     return OK;
   }
 
-  const fillIdx = opts.findIndex((a) => a === "--debug-fill" || a.startsWith("--debug-fill="));
-  let level: number | undefined;
-  const li = opts.findIndex((a) => a === "--level" || a.startsWith("--level="));
-  if (li >= 0) {
-    const v = opts[li].includes("=") ? opts[li].split("=")[1] : opts[li + 1];
-    level = parseInt(v, 10) || undefined;
-  }
-
-  if (fillIdx >= 0) {
-    const tile = (opts[fillIdx].includes("=") ? opts[fillIdx].split("=")[1] : opts[fillIdx + 1] ?? "").toUpperCase();
-    if (!tile) {
-      ctx.print("dario-brothers: --debug-fill requires a TILE (see --list-tiles)", "c-err");
-      return ERR;
-    }
-    switch (tile) {
+  const { level, fill } = parsed;
+  if (fill !== undefined) {
+    switch (fill) {
       case "COIN":
         ctx.print("dario-brothers: debug fill = COIN", "c-dim");
         ctx.print("dario-brothers: generating level (every empty tile -> COIN)...", "c-dim");
@@ -826,7 +904,7 @@ function runGame(args: string[], ctx: Ctx): RunResult {
         return { code: 139 };
       case "GROUND":
       case "BRICK":
-        ctx.print(`dario-brothers: debug fill = ${tile}`, "c-dim");
+        ctx.print(`dario-brothers: debug fill = ${fill}`, "c-dim");
         ctx.print("dario-brothers: level is now solid. Dario cannot move.", "c-warn");
         ctx.print("dario-brothers: episode ended after 0 coins.", "c-dim");
         return OK;
@@ -841,10 +919,10 @@ function runGame(args: string[], ctx: Ctx): RunResult {
         return OK;
       case "PIPE":
       case "QBLOCK":
-        ctx.print(`dario-brothers: --debug-fill ${tile}: unsupported fill tile`, "c-err");
+        ctx.print(`dario-brothers: --debug-fill ${fill}: unsupported fill tile`, "c-err");
         return ERR;
       default:
-        ctx.print(`dario-brothers: unknown tile '${tile}' (see --list-tiles)`, "c-err");
+        ctx.print(`dario-brothers: unknown tile '${fill}' (see --list-tiles)`, "c-err");
         return ERR;
     }
   }

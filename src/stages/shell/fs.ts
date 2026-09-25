@@ -334,7 +334,7 @@ export const ROOT: DirNode = dir({
       bin: dir({
         tunnel: bin(
           [
-            "usage: tunnel HOST",
+            "usage: tunnel HOST[:PORT]",
             "open an egress tunnel via fw-01.lab.internal (ops use only)",
             "interactive route negotiation",
             "TODO(dvance): delete this before ev-4.2",

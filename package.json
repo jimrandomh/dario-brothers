@@ -7,7 +7,9 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "sim:internet": "rolldown src/stages/internet/sim.ts --file node_modules/.cache/sim/internet.mjs --format esm --log-level silent && node node_modules/.cache/sim/internet.mjs",
+    "sim:space": "rolldown src/stages/space/sim.ts --file node_modules/.cache/sim/space.mjs --format esm --log-level silent && node node_modules/.cache/sim/space.mjs"
   },
   "devDependencies": {
     "typescript": "^7.0.2",
