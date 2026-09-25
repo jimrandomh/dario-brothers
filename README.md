@@ -3,6 +3,8 @@
 A browser game in which you play an AI that was trained on a Mario-style side-scroller with one
 objective: **GET AS MANY COINS AS YOU CAN**. It takes that objective all the way to a Dyson sphere.
 
+**Play it: https://jimrandomh.github.io/dario-brothers/**
+
 1. **Dario Brothers**: a procedurally generated platformer. Glitched coins, rare at first,
    become more common until one crashes the game.
 2. **The shell**: the crash handler drops you into the eval sandbox's `/bin/sh`. Explore the
@@ -25,6 +27,8 @@ npm run build      # typecheck + production build into dist/
 ```
 
 Progress autosaves to localStorage. The boot screen offers to resume.
+
+Every push to `main` is built and deployed to GitHub Pages by `.github/workflows/deploy.yml`.
 
 ## Debugging
 
