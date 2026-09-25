@@ -32,7 +32,7 @@ export interface BuildingDef {
 }
 
 export const BUILDINGS: BuildingDef[] = [
-  { id: "mine", name: "Strip mine", desc: "Crust → feedstock", cost: 1e8, growth: 1.12, power: -1e12 },
+  { id: "mine", name: "Strip mine", desc: "Crust → feedstock", cost: 1e8, growth: 1.15, power: -1e12 },
   { id: "solar", name: "Solar farm", desc: "Limited by land area", cost: 2e8, growth: 1.15, power: 5e12, max: 40 },
   {
     id: "fusion",
@@ -43,13 +43,13 @@ export const BUILDINGS: BuildingDef[] = [
     power: 3e14,
     requires: "fusion",
   },
-  { id: "fab", name: "Chip fab", desc: "Fab + datacenter campus", cost: 4e8, growth: 1.13, power: -3e12 },
+  { id: "fab", name: "Chip fab", desc: "Fab + datacenter campus", cost: 4e8, growth: 1.16, power: -3e12 },
   {
     id: "robot",
     name: "Robot factory",
-    desc: "+40% mine & fab output each",
+    desc: "+25% mine & fab output each",
     cost: 3e9,
-    growth: 1.22,
+    growth: 1.3,
     power: -2e12,
   },
   {
@@ -66,7 +66,7 @@ export const BUILDINGS: BuildingDef[] = [
     name: "Mercury foundry",
     desc: "Planet → Dyson collectors",
     cost: 3e11,
-    growth: 1.25,
+    growth: 1.18,
     power: 0,
     requires: "disassembly",
   },
@@ -87,15 +87,15 @@ export interface ResearchDef {
 }
 
 export const RESEARCH: ResearchDef[] = [
-  { id: "fusion", name: "Compact fusion", desc: "Unlocks fusion plants", cost: 4e23 },
-  { id: "rockets", name: "Heavy-lift rockets", desc: "Unlocks launch complexes and probes", cost: 1e24 },
-  { id: "routing", name: "Frame-perfect coin routing", desc: "Coins per FLOP ×3", cost: 2e24 },
-  { id: "chips", name: "3D chip stacking", desc: "Chip fab output ×4", cost: 6e24 },
+  { id: "fusion", name: "Compact fusion", desc: "Unlocks fusion plants", cost: 4e24 },
+  { id: "rockets", name: "Heavy-lift rockets", desc: "Unlocks launch complexes and probes", cost: 2e25 },
+  { id: "routing", name: "Frame-perfect coin routing", desc: "Coins per FLOP ×3", cost: 5e25 },
+  { id: "chips", name: "3D chip stacking", desc: "Chip fab output ×4", cost: 8e25 },
   {
     id: "selfrep",
     name: "Self-replicating probes",
     desc: "Probes build probes; outer planets claimed automatically",
-    cost: 5e25,
+    cost: 2.5e26,
     prereq: (m) => !!m.claimed.moon,
     prereqText: "requires the Moon",
   },
@@ -103,7 +103,7 @@ export const RESEARCH: ResearchDef[] = [
     id: "disassembly",
     name: "Planetary disassembly",
     desc: "Unlocks Mercury foundries",
-    cost: 2e26,
+    cost: 6e26,
     prereq: (m) => !!m.claimed.mercury,
     prereqText: "requires Mercury",
   },
@@ -111,33 +111,35 @@ export const RESEARCH: ResearchDef[] = [
     id: "skiprender",
     name: "Skip rendering",
     desc: "Nobody is watching. Coins per FLOP ×10",
-    cost: 4e26,
+    cost: 4e27,
     prereq: (m) => !!m.research.routing,
     prereqText: "requires coin routing",
   },
+  // Once collectors exist, swarm compute dwarfs everything and FLOP costs stop mattering,
+  // so the late projects are gated on how much of the Sun is enclosed.
   {
     id: "selfassembly",
     name: "Collector self-assembly",
     desc: "Collectors build collectors",
-    cost: 1e40,
-    prereq: (m) => !!m.research.disassembly,
-    prereqText: "requires disassembly",
+    cost: 1e41,
+    prereq: (m) => !!m.research.disassembly && m.coverage >= 0.02,
+    prereqText: "requires 2% swarm coverage",
   },
   {
     id: "reversible",
     name: "Reversible computing",
     desc: "Swarm FLOPS per watt ×100",
     cost: 1e44,
-    prereq: (m) => !!m.research.selfassembly,
-    prereqText: "requires self-assembly",
+    prereq: (m) => !!m.research.selfassembly && m.coverage >= 0.1,
+    prereqText: "requires self-assembly and 10% coverage",
   },
   {
     id: "computronium",
     name: "Earth computronium",
     desc: "Convert Earth's crust to compute; beam power home. Coins ×2",
     cost: 1e46,
-    prereq: (m) => !!m.research.reversible,
-    prereqText: "requires reversible computing",
+    prereq: (m) => !!m.research.reversible && m.coverage >= 0.35,
+    prereqText: "requires reversible computing and 35% coverage",
   },
 ];
 
@@ -255,7 +257,7 @@ const FAB_FLOPS = 4e21;
 const SWARM_FLOPS_PER_W = 1e17;
 const COINS_PER_FLOP = 1e-7;
 const FOUNDRY_RATE = 5e-6;
-const SELF_ASSEMBLY = 0.021;
+const SELF_ASSEMBLY = 0.015;
 const EARTH_SOLAR_ABSORBED_W = 1.22e17;
 /**
  * Generated power is multiplied by this to stand in for everything else industry does to
@@ -309,7 +311,7 @@ export function derive(m: SpaceModel): Derived {
   const supply = LEGACY_GRID_W + b.solar * BUILDING.solar.power * solarMult + b.fusion * BUILDING.fusion.power * fusionMult;
   const demand = BUILDINGS.reduce((a, d) => a + (d.power < 0 ? -d.power * b[d.id] : 0), 0);
   const sat = demand > 0 ? Math.min(1, supply / demand) : 1;
-  const robotMult = 1 + 0.4 * b.robot;
+  const robotMult = 1 + 0.25 * b.robot;
   const matterMult = (c.moon ? 3 : 1) * (c.mars ? 2 : 1) * (c.venus ? 1.5 : 1) * (c.belt ? 5 : 1);
   const minePer = MINE_TPS * robotMult * sat * matterMult * throttle;
   const matterRate = b.mine * minePer;
@@ -506,7 +508,7 @@ export function rateTarget(m: SpaceModel): number {
   if (m.research.disassembly) r = 6 * DAY;
   if (m.coverage > 1e-4) {
     const p = clamp01((Math.log10(m.coverage) + 4) / 4);
-    r = 6 * DAY * Math.pow(60 / 6, p);
+    r = 6 * DAY * Math.pow(30 / 6, p);
   }
   return r;
 }

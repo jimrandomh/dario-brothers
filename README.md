@@ -36,5 +36,7 @@ Every push to `main` is built and deployed to GitHub Pages by `.github/workflows
 - `?stage=platformer&level=6` jumps to a platformer level; add `&mode=coinfill` for coin-fill mode.
 - `?reset` wipes the save.
 - `?fast` speeds up the later stages.
+- `npm run sim:internet` and `npm run sim:space` simulate the two clicker stages headlessly and
+  report how long they take.
 
 See `DESIGN.md` for the architecture, story bible and test hooks.

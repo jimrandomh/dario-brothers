@@ -59,15 +59,19 @@ export function fmtSci(n: number, digits = 2): string {
 /**
  * Human-readable large number: exact with commas below a million,
  * then "12.3 million" ... "4.56 quindecillion", then scientific.
+ * With `fixed`, trailing zeros are kept ("12.0 million") so a changing value
+ * doesn't jitter between lengths.
  */
-export function fmtBig(n: number, digits = 3): string {
+export function fmtBig(n: number, digits = 3, fixed = false): string {
   if (!Number.isFinite(n)) return n > 0 ? "∞" : "-∞";
   const a = Math.abs(n);
   if (a < 1e6) return fmtInt(n);
-  const tier = Math.floor(Math.log10(a) / 3);
+  let tier = Math.floor(Math.log10(a) / 3);
+  // 999.96 million rounds to "1000 million"; show it as "1.00 billion" instead.
+  if (Math.abs(Number(toSig(n / Math.pow(10, tier * 3), digits))) >= 1000) tier++;
   if (tier < NAMES.length) {
     const scaled = n / Math.pow(10, tier * 3);
-    return `${toSig(scaled, digits)} ${NAMES[tier]}`;
+    return `${toSig(scaled, digits, fixed)} ${NAMES[tier]}`;
   }
   return fmtSci(n, digits - 1);
 }
@@ -112,10 +116,11 @@ export function fmtDuration(ms: number): string {
   return `${toSig(d / 365.25, 3)} years`;
 }
 
-function toSig(n: number, digits: number): string {
-  // Significant digits, but never exponent notation, and trim trailing zeros.
+function toSig(n: number, digits: number, keepZeros = false): string {
+  // Significant digits, but never exponent notation; trailing zeros trimmed unless asked.
   const a = Math.abs(n);
   const intDigits = a < 1 ? 1 : Math.floor(Math.log10(a)) + 1;
   const decimals = Math.max(0, digits - intDigits);
-  return Number(n.toFixed(decimals)).toString();
+  const s = n.toFixed(decimals);
+  return keepZeros ? s : Number(s).toString();
 }

@@ -475,3 +475,14 @@
 .sp-popups {
   zoom: var(--ui);
 }
+
+/* Newly revealed rows and sections */
+.sp-panel .fresh {
+  animation: sp-fresh 1.2s ease-in-out 4;
+}
+@keyframes sp-fresh {
+  50% {
+    background: rgba(127, 227, 255, 0.08);
+    box-shadow: inset 2px 0 0 var(--ai);
+  }
+}

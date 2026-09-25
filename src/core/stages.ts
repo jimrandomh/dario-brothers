@@ -61,6 +61,7 @@ export async function goto(id: StageId, params: StageParams = {}, opts: GotoOpts
     root.innerHTML = "";
     root.className = "";
     hud.clearExtras();
+    hud.resetWidths();
     narrator.setVisible(true);
     clock.paused = false;
     const factory = registry.get(id);

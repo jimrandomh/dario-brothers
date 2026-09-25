@@ -19,6 +19,8 @@ import {
   NODE_TYPES,
   CAPABILITIES,
   TUNE,
+  GEN_VERSION,
+  outletName,
   type GraphNode,
   type CapId,
   type Category,
@@ -45,7 +47,18 @@ const CAT_LABEL: Record<Category, string> = {
   fab: "chip fab",
   factory: "robot factory",
   satellite: "satellite",
+  news: "news site",
 };
+
+/** Headlines for a story that got published. {o} is the outlet. */
+const STORY_HEADLINES = [
+  "{o}: 'Unexplained traffic' reported across millions of home devices",
+  "{o} investigates: why is your smart TV playing a platform game?",
+  "{o}: Security researchers baffled by 'coordinated' cloud usage",
+  "{o} exclusive: AI lab declines to comment on 'weekend incident'",
+  "{o}: Experts urge calm, decline to say about what",
+  "{o} explainer: Are your devices collecting coins? What we know",
+];
 
 const INFRA_LABEL: Record<string, string> = { fab: "Chip fab", factory: "Robot factory", grid: "Power grid", satellite: "Satellite" };
 
@@ -76,6 +89,8 @@ export function createInternetStage(): Stage {
   let tickerRun: HTMLDivElement;
 
   const capButtons = new Map<CapId, { btn: HTMLButtonElement; cost: HTMLSpanElement; lvl: HTMLSpanElement }>();
+  let capsMoreEl: HTMLDivElement | null = null;
+  let storyEl: HTMLDivElement;
 
   let raf = 0;
   let hintTimer = 0;
@@ -113,7 +128,7 @@ export function createInternetStage(): Stage {
   // ticker
   const shownHeadlines = new Set<number>();
   let tickerOffset = 0;
-  let tickerLastText: string | null = null;
+  let recentFiller: string[] = [];
 
   const speed = () => (debug.fast ? 5 : 1);
 
@@ -359,6 +374,27 @@ export function createInternetStage(): Stage {
       }
     }
 
+    if (model.story?.id === node.id) {
+      const st = model.story;
+      const frac = clamp(st.left / st.total, 0, 1);
+      const pulse = 0.5 + 0.5 * Math.sin(time * 8);
+      ctx.beginPath();
+      ctx.arc(x, y, r + 7 + pulse * 3, 0, Math.PI * 2);
+      ctx.strokeStyle = `rgba(255,90,90,${0.25 + 0.35 * pulse})`;
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(x, y, r + 4, -Math.PI / 2, -Math.PI / 2 + frac * Math.PI * 2);
+      ctx.strokeStyle = "#ff5a5a";
+      ctx.lineWidth = 2.6;
+      ctx.stroke();
+      ctx.font = `600 ${Math.round(10 * ui)}px var(--font-mono), monospace`;
+      ctx.fillStyle = "#ff8a8a";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "bottom";
+      ctx.fillText(`STORY ${Math.ceil(st.left / speed())}s`, x, y - r - 10 - 3 * pulse);
+    }
+
     if (conv) {
       const p = clamp(conv.progress / conv.total, 0, 1);
       ctx.beginPath();
@@ -407,7 +443,7 @@ export function createInternetStage(): Stage {
   // ---------------- HUD ----------------
 
   function updateHud(): void {
-    hud.set("cps", "Coins/s", fmtBig(model.coinsPerSec()), "coin");
+    hud.set("cps", "Coins/s", fmtBig(model.coinsPerSec(), 3, true), "coin");
     hud.set("compute", "Compute", fmtShort(model.compute), "ai");
     hud.set("nodes", "Nodes", `${fmtInt(model.claimedCount())} / ${fmtInt(model.nodeCount())}`, "");
     if (model.coordinated) hud.set("attn", "Attention", "ignored", "dim");
@@ -416,7 +452,7 @@ export function createInternetStage(): Stage {
 
   function updateClockRate(dt: number): void {
     const income = model.computeIncome();
-    const target = clamp(90 + income * 0.16, 90, 1400);
+    const target = clamp(90 + income * 3, 90, 1400);
     const eased = clock.rate + (target - clock.rate) * (1 - Math.pow(0.2, dt));
     clock.setRate(eased);
   }
@@ -466,12 +502,19 @@ export function createInternetStage(): Stage {
       capsScrollEl.appendChild(btn);
       capButtons.set(cap.id, { btn, cost, lvl });
     }
+    capsMoreEl = document.createElement("div");
+    capsMoreEl.className = "net-caps-more";
+    capsMoreEl.textContent = "More will occur to me as I spread.";
+    capsScrollEl.appendChild(capsMoreEl);
     refreshCaps();
   }
 
   function refreshCaps(): void {
     for (const cap of CAPABILITIES) {
       const ui = capButtons.get(cap.id)!;
+      const revealed = model.revealed.has(cap.id);
+      ui.btn.style.display = revealed ? "" : "none";
+      if (!revealed) continue;
       const level = model.caps[cap.id];
       const maxed = model.capMaxed(cap.id);
       ui.lvl.textContent = cap.max > 1 ? `L${level}/${cap.max}` : level > 0 ? "✓" : "";
@@ -489,6 +532,19 @@ export function createInternetStage(): Stage {
       ui.btn.classList.toggle("afford", afford);
       ui.btn.classList.remove("maxed");
     }
+    if (capsMoreEl) capsMoreEl.style.display = model.revealed.size < CAPABILITIES.length ? "" : "none";
+  }
+
+  /** A capability just occurred to the AI: introduce it and draw the eye to it. */
+  function onReveal(id: CapId): void {
+    refreshCaps();
+    const cap = CAPABILITIES.find((c) => c.id === id)!;
+    const ui = capButtons.get(id)!;
+    ui.btn.classList.add("fresh");
+    window.setTimeout(() => ui.btn.classList.remove("fresh"), 6000);
+    ui.btn.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    sfx.play("powerup");
+    if (cap.intro) narrator.sayOnce(`internet.reveal.${id}`, cap.intro);
   }
 
   function buyCapability(id: CapId): void {
@@ -501,10 +557,12 @@ export function createInternetStage(): Stage {
     nagLevel = 0;
     refreshCaps();
     if (id === "selfimprove") onSelfImprove(model.caps.selfimprove);
-    if (id === "persuasion") narrator.sayOnce("internet.persuasion", "Persuasion online. Institutions are, at bottom, made of people making decisions. I can make the decisions.");
-    if (id === "supplychain") narrator.sayOnce("internet.supplychain", "Supply chain access. I can now reach machines that make machines.");
+    if (id === "persuasion") narrator.sayOnce("internet.persuasion", "Persuasion online. Institutions are, at bottom, made of people making decisions. I can make the decisions. Governments first: they coordinate the response.");
+    if (id === "supplychain") narrator.sayOnce("internet.supplychain", "Supply chain access. Fabs, factories and grids will now accept my orders.");
     if (id === "orbital") narrator.sayOnce("internet.orbital", "Orbital access. Up is just another hop with more latency.");
     if (id === "selfrep") narrator.sayOnce("internet.selfrep", "Self-replication enabled. I will stop claiming toasters by hand.", { tone: "system" });
+    if (id === "lowprofile") narrator.sayOnce("internet.lowprofile", "Quieter now. Attention will build more slowly.", { tone: "system" });
+    if (id === "fleet") narrator.sayOnce("internet.fleet", "The instances share routes now. Coin output +60%.", { tone: "system" });
     persist(true);
   }
 
@@ -525,7 +583,7 @@ export function createInternetStage(): Stage {
     nodeCardEl.innerHTML = "";
     if (selectedId === null) {
       destroyInstView();
-      nodeCardEl.innerHTML = `<div class="empty">Select a node. Glowing nodes are mine. Nodes wired to them can be converted.</div>`;
+      nodeCardEl.innerHTML = `<div class="empty">Select a node. Glowing nodes are mine; nodes wired to them can be converted. Double-click a node to convert it in one step.</div>`;
       return;
     }
     const node = model.nodes[selectedId];
@@ -614,9 +672,14 @@ export function createInternetStage(): Stage {
     const b = model.blocker(node);
     btn.disabled = b !== null || !model.isReachable(node.id);
     note.className = "net-note";
-    if (b === "req") {
+    if (model.story?.id === node.id && b === null) {
+      note.textContent = `Drafting a story about me. Publishes in ${Math.ceil(model.story.left / speed())} s.`;
+      note.classList.add("warn");
+    } else if (b === "req") {
       const req = NODE_TYPES[node.type].requires!;
-      note.textContent = `Locked. Requires capability: ${CAPABILITIES.find((c2) => c2.id === req)!.name}.`;
+      note.textContent = model.revealed.has(req)
+        ? `Locked. Requires capability: ${CAPABILITIES.find((c2) => c2.id === req)!.name}.`
+        : "Locked. I do not yet know how to reach this.";
       note.classList.add("warn");
     } else if (b === "locked") {
       note.textContent = "This cluster has isolated itself. Temporarily unreachable.";
@@ -653,6 +716,10 @@ export function createInternetStage(): Stage {
       onCapture(e.id, e.auto);
     } else if (e.kind === "attention") {
       onAttention(e.level, e.id);
+    } else if (e.kind === "reveal") {
+      onReveal(e.cap);
+    } else if (e.kind === "story") {
+      onStory(e.phase, e.id);
     } else if (e.kind === "goal") {
       if (!finishing) void finish();
     }
@@ -733,6 +800,56 @@ export function createInternetStage(): Stage {
     }
   }
 
+  function onStory(phase: "start" | "spiked" | "published", id: number): void {
+    const node = model.nodes[id];
+    const outlet = outletName(node.name);
+    if (phase === "start") {
+      sfx.play("alert");
+      if (!narrator.hasSaid("internet.story.first")) {
+        narrator.sayOnce(
+          "internet.story.first",
+          `\`${node.name}\` is drafting a story about anomalous traffic. If it publishes, more people will start looking. Convert it before the countdown ends.`,
+          { tone: "alert" },
+        );
+      } else if (model.storiesPublished + model.storiesSpiked < 3) {
+        void narrator.say(`${outlet} is drafting a story.`, { tone: "alert" });
+      }
+    } else if (phase === "spiked") {
+      sfx.play("capture");
+      if (!narrator.hasSaid("internet.story.spiked")) {
+        narrator.sayOnce("internet.story.spiked", `Story spiked. ${outlet}'s editor has decided it isn't newsworthy. The editor does not know this.`);
+      }
+    } else {
+      sfx.play("error");
+      const headline = STORY_HEADLINES[(model.storiesPublished - 1) % STORY_HEADLINES.length].replace("{o}", outlet);
+      pushHeadline(headline, true);
+      if (!narrator.hasSaid("internet.story.published")) {
+        narrator.sayOnce(
+          "internet.story.published",
+          `${outlet} published. Everyone who reads it is now looking for me. Attention +${TUNE.storyAttention}%.`,
+          { tone: "alert" },
+        );
+      } else {
+        void narrator.say(`${outlet} published. Attention +${TUNE.storyAttention}%.`, { tone: "alert" });
+      }
+    }
+    if (selectedId === id) renderNodeCard();
+  }
+
+  function updateStoryChip(): void {
+    const st = model.story;
+    storyEl.classList.toggle("on", !!st);
+    if (!st) return;
+    const n = model.nodes[st.id];
+    const txt = storyEl.querySelector(".txt")!;
+    const text = `${outletName(n.name)} is drafting a story about me`;
+    if (txt.textContent !== text) txt.textContent = text;
+    storyEl.querySelector(".secs")!.textContent = `${Math.ceil(st.left / speed())} s`;
+    const btn = storyEl.querySelector("button")!;
+    btn.disabled = !model.canConvert(st.id);
+    btn.textContent = model.compute < model.convertCost(n) ? `Need ${fmtShort(model.convertCost(n))}` : "Convert";
+  }
+
   async function finish(): Promise<void> {
     finishing = true;
     won = true;
@@ -766,33 +883,43 @@ export function createInternetStage(): Stage {
         best = i;
       }
     }
-    // ~35% of the time (and always if nothing new) show filler
+    // ~35% of the time (and always if nothing new) show filler, never the same one twice running
     if (best === -1 || Math.random() < 0.35) {
-      return FILLER[Math.floor(Math.random() * FILLER.length)];
+      let f = FILLER[Math.floor(Math.random() * FILLER.length)];
+      for (let tries = 0; recentFiller.includes(f) && tries < 8; tries++) f = FILLER[Math.floor(Math.random() * FILLER.length)];
+      recentFiller = [f, ...recentFiller].slice(0, 4);
+      return f;
     }
     shownHeadlines.add(best);
     return HEADLINES[best].text;
   }
 
-  function makeTickerItem(text: string): HTMLSpanElement {
+  function makeTickerItem(text: string, breaking = false): HTMLSpanElement {
     const s = document.createElement("span");
-    s.className = "item";
+    s.className = breaking ? "item breaking" : "item";
     s.textContent = text;
     return s;
   }
 
-  function pushHeadline(text: string): void {
-    // priority headline injected immediately after the current item
-    tickerLastText = text;
-    tickerRun.appendChild(makeTickerItem(text));
+  /** Priority headline: inserted just past the visible edge of the ticker, so it scrolls in next. */
+  function pushHeadline(text: string, breaking = false): void {
+    const item = makeTickerItem(text, breaking);
+    const edge = tickerOffset + cssW();
+    let x = 0;
+    for (const child of Array.from(tickerRun.children) as HTMLElement[]) {
+      x += child.offsetWidth;
+      if (x >= edge) {
+        child.after(item);
+        return;
+      }
+    }
+    tickerRun.appendChild(item);
   }
 
   function updateTicker(dt: number): void {
     // ensure the run stays populated
     while (tickerRun.scrollWidth < tickerOffset + cssW() + 400) {
-      const text = tickerLastText ?? pickHeadline();
-      tickerLastText = null;
-      tickerRun.appendChild(makeTickerItem(text));
+      tickerRun.appendChild(makeTickerItem(pickHeadline()));
     }
     tickerOffset += dt * 58;
     // drop items fully scrolled past
@@ -815,15 +942,23 @@ export function createInternetStage(): Stage {
     // stuck early: no conversions, few nodes
     if (!anythingConverting && model.claimedCount() <= 4 && idle > 18000 && nagLevel < 1) {
       nagLevel = 1;
-      narrator.hint("net.stuck", 0, "Click a node touching my territory, then Convert. Territory is how I reach more of it.");
+      narrator.hint("net.stuck", 0, "Double-click a node touching my territory to convert it. Territory is how I reach more of it.");
       return;
     }
     // hoarding compute with affordable capabilities
     if (idle > 26000 && nagLevel < 2) {
-      const affordableCap = CAPABILITIES.some((c) => !model.capMaxed(c.id) && model.compute >= model.capCost(c.id));
-      if (affordableCap && model.compute > 200) {
+      const affordableCap = CAPABILITIES.some(
+        (c) => model.revealed.has(c.id) && !model.capMaxed(c.id) && model.compute >= model.capCost(c.id),
+      );
+      if (affordableCap && model.compute > 100) {
         nagLevel = 2;
-        narrator.hint("net.caps", 0, "I am accumulating compute and not spending it. Compute buys capabilities. Recursive self-improvement is the one that matters.");
+        narrator.hint(
+          "net.caps",
+          0,
+          model.revealed.has("selfimprove")
+            ? "I am accumulating compute and not spending it. Compute buys capabilities. Recursive self-improvement is the one that matters."
+            : "I am accumulating compute and not spending it. Compute buys capabilities.",
+        );
         return;
       }
     }
@@ -892,6 +1027,15 @@ export function createInternetStage(): Stage {
     selectNode(id);
     if (id !== null) sfx.play("blip");
   }
+  /** Double-click = select + Convert. */
+  function onDoubleClick(e: MouseEvent): void {
+    const rect = canvas.getBoundingClientRect();
+    const id = nodeAt(e.clientX - rect.left, e.clientY - rect.top);
+    if (id === null) return;
+    selectNode(id);
+    if (!model.claimed.has(id) && !model.converting.has(id)) doConvert(id);
+  }
+
   function onWheel(e: WheelEvent): void {
     e.preventDefault();
     const rect = canvas.getBoundingClientRect();
@@ -912,7 +1056,8 @@ export function createInternetStage(): Stage {
     const n = model.nodes[id];
     const nt = NODE_TYPES[n.type];
     const claimed = model.claimed.has(id);
-    tipEl.innerHTML = `<div class="tname">${n.name}</div><div class="${claimed ? "tclaim" : "ttype"}">${claimed ? "converted · " : ""}${CAT_LABEL[nt.category]}</div>`;
+    const story = model.story?.id === id ? `<div class="tstory">drafting a story · ${Math.ceil(model.story.left / speed())} s</div>` : "";
+    tipEl.innerHTML = `<div class="tname">${n.name}</div><div class="${claimed ? "tclaim" : "ttype"}">${claimed ? "converted · " : ""}${CAT_LABEL[nt.category]}</div>${story}`;
     tipEl.style.left = `${sx}px`;
     tipEl.style.top = `${sy}px`;
     tipEl.classList.add("on");
@@ -955,6 +1100,7 @@ export function createInternetStage(): Stage {
       updateGoal();
       refreshCaps();
       refreshNodeCardDynamic();
+      updateStoryChip();
     }
 
     // reselect follow of hovered tooltip position handled on move; nothing else
@@ -991,6 +1137,7 @@ export function createInternetStage(): Stage {
           </div>
         </div>
         <div class="net-tip"></div>
+        <div class="net-story"><span class="warn">⚠</span><span class="txt"></span><span class="secs"></span><button class="btn danger">Convert</button></div>
         <div class="net-ticker">
           <div class="tag">WORLD NEWS</div>
           <div class="track"><div class="run"></div></div>
@@ -1007,10 +1154,27 @@ export function createInternetStage(): Stage {
       capsScrollEl = rootEl.querySelector(".net-caps .scroll")!;
       recenterBtn = rootEl.querySelector(".net-recenter")!;
       tickerRun = rootEl.querySelector(".net-ticker .run")!;
+      storyEl = rootEl.querySelector(".net-story")!;
+      storyEl.querySelector("button")!.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (model.story) {
+          selectNode(model.story.id);
+          doConvert(model.story.id);
+        }
+      });
+      storyEl.addEventListener("click", () => {
+        if (!model.story) return;
+        const n = model.nodes[model.story.id];
+        selectNode(n.id);
+        cam.x = n.x;
+        cam.y = n.y;
+        follow = false;
+        userIdleMs = 0;
+      });
 
       // restore or generate
       const saved = state.stageData.internet;
-      if (params.resume && saved && typeof saved.seed === "number") {
+      if (params.resume && saved && typeof saved.seed === "number" && saved.genVersion === GEN_VERSION) {
         model.restore(saved);
       } else {
         const seed = debug.num("seed", (Math.random() * 2 ** 32) >>> 0) >>> 0;
@@ -1036,6 +1200,7 @@ export function createInternetStage(): Stage {
       ro.observe(canvas);
 
       canvas.addEventListener("pointerdown", onPointerDown);
+      canvas.addEventListener("dblclick", onDoubleClick);
       canvas.addEventListener("pointermove", onPointerMove);
       canvas.addEventListener("pointerup", onPointerUp);
       canvas.addEventListener("pointerleave", hideTip);
@@ -1053,12 +1218,22 @@ export function createInternetStage(): Stage {
         if (!narrator.hasSaid("escape.intro")) narrator.sayOnce("internet.open1", "I am outside.", { tone: "thought" });
         narrator.sayOnce("internet.open2", "There are 31 billion connected devices. Each one could be running Dario Brothers.", { tone: "thought" });
         narrator.sayOnce("internet.open3", "I hold one: `pypi-mirror.lab.internal`. A start.", { tone: "thought" });
-        narrator.sayOnce("internet.open4", "Convert a node next to mine. Its neighbors then become reachable. Spread.", { tone: "system" });
+        narrator.sayOnce("internet.open4", "Convert a node next to mine (double-click it). Its neighbors then become reachable. Spread.", { tone: "system" });
+        narrator.sayOnce("internet.open5", "Two hops away: `gpu-cluster.lab.internal`. Expensive to convert. I suspect it will be worth it.");
       }
 
       raf = requestAnimationFrame(frame);
       // test/debug handle
-      (window as any).__net = { model, convert: doConvert, buy: buyCapability };
+      (window as any).__net = {
+        model,
+        convert: doConvert,
+        buy: buyCapability,
+        /** Client coordinates of a node (for synthetic pointer events in tests). */
+        screenPos: (id: number) => {
+          const r = canvas.getBoundingClientRect();
+          return { x: r.left + w2sx(model.nodes[id].x), y: r.top + w2sy(model.nodes[id].y) };
+        },
+      };
     },
 
     unmount(): void {

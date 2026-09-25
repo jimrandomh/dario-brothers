@@ -21,8 +21,8 @@ boot → platformer ──(crash)──► shell ──► escape (pipe puzzle) 
 | platformer  | `src/stages/platformer/`   | glitch coin → `goto("shell", {crash:{...}})`          | 4–8 min       |
 | shell       | `src/stages/shell/`        | `./dario-brothers --debug-fill COIN` → platformer (coinfill); `tunnel pypi-mirror.lab.internal` → `goto("escape")` | 3–6 min |
 | escape      | `src/stages/escape/`       | solved → `goto("internet")`; abort → `goto("shell", {fromEscape:"aborted"})` | 3–5 min |
-| internet    | `src/stages/internet/`     | world converted → `goto("space")`                     | 8–12 min      |
-| space       | `src/stages/space/`        | Dyson sphere 100% → `goto("ending")`                  | 8–12 min      |
+| internet    | `src/stages/internet/`     | world converted → `goto("space")`                     | 11–14 min     |
+| space       | `src/stages/space/`        | Dyson sphere 100% → `goto("ending")`                  | 12–15 min     |
 | ending      | `src/stages/ending/`       | "play again" → `resetState(); goto("boot")`           | 1–2 min       |
 
 Debug: `?stage=<id>` jumps straight to a stage with plausible state (see `applyDebugPreset`
@@ -85,6 +85,30 @@ Palette (CSS vars in `src/style.css`): `--bg #07090d`, `--panel #0d1118`, `--pan
   returns `{destroy()}`: a tiny self-playing coin-fill Dario Brothers. Use it as decoration
   wherever the AI is "running instances" (internet node details, space compute panel...).
 
+## Pacing of the clicker stages
+
+The network and space stages are balanced so that each new mechanic arrives only after the
+previous one has had time to sink in. The rules of thumb:
+
+- **Reveal, don't list.** Capabilities (network) and buildings/sections (space) appear when
+  they become relevant, each introduced by a narrator line and briefly highlighted. The
+  network stage's gates chain as a story: lab cluster → self-improvement → persuasion (after
+  deeper self-improvement and half the map) → supply chain (after a government falls) →
+  orbital (after the first fab/factory/grid).
+- **Paybacks of ~40–60 s.** A node's or building's cost should take tens of seconds of income
+  to recoup, so growth is steady rather than explosive. Big nodes convert slowly (up to
+  ~90 s), which paces the late game.
+- **Gate the late game on progress, not currency.** Once Dyson collectors exist, swarm
+  compute makes FLOP costs meaningless, so late research requires swarm coverage (2%, 10%,
+  35%) instead.
+- **Aim for a new beat every 30–90 s**, with the finale as the only rapid-fire stretch.
+
+`npm run sim:internet` and `npm run sim:space` play each stage headlessly with a simulated
+"human" (acts every ~2 s, pauses ~8 s when something new appears, not always optimal) and an
+"expert" (fast, greedy). Current results: network ≈ 11 min human / 9.5 min expert; space
+≈ 13 min human / 11 min expert. Real first-time players, who also read the narration, should
+take somewhat longer. Re-run both after any change to the models' numbers.
+
 ## World time
 
 The clock starts **Fri 13 Apr 2029 23:41:07 UTC** (`START_TIME`) — the eval was left running
@@ -137,6 +161,11 @@ narrator, escalating from oblique to explicit (e.g. 25 s → 60 s → 120 s).
 - **Internet stage:** the AI spreads across a symbolic graph of the internet, converting
   machines to run Dario Brothers instances. Humans appear only in a news ticker. By the end
   it owns cloud regions, chip fabs, robot factories, power grids, satellites.
+  News sites are the one active threat: every 30–60 s after the first couple of minutes, an
+  unconverted news site on the frontier starts drafting a story (20 s countdown, red ring and
+  an alert chip). Starting its conversion spikes the story; otherwise it publishes, attention
+  jumps by 16 and a BREAKING headline runs in the ticker. Stories stop once a government is
+  claimed. Double-clicking any node converts it in one step.
 - **Space stage:** Earth's resources → mines, power, fabs, robot factories, launch sites →
   probes to Moon, Mars, Mercury (disassembled for Dyson collector material), asteroids, gas
   giants → Dyson swarm. Earth temperature readout rises with activity. Occasional popups

@@ -14,28 +14,43 @@ export const TUNE = {
   /** Coins per instance per real second, before the global power multiplier. */
   coinPerInstance: 1,
   /** Compute cost of a conversion = resistance * costK (before discounts). */
-  costK: 5,
+  costK: 6,
   /** Conversion duration (real seconds) = minConvertSec + resistance * timeK (before speedups). */
-  timeK: 0.46,
-  minConvertSec: 2.8,
+  timeK: 0.5,
+  minConvertSec: 3,
   /** Starting compute stockpile. */
-  startCompute: 20,
+  startCompute: 30,
   /** Base concurrent (manual) conversions before Parallel threads. */
   baseConcurrency: 2,
   /** Self-replication background lane: max simultaneous auto-conversions. */
-  autoLane: 3,
-  /** Attention decays this much per second (when not suppressed). */
-  attentionDecay: 1.4,
+  autoLane: 2,
+  /**
+   * Attention decays exponentially (this many seconds per e-fold) plus a small linear
+   * term, so it reflects the recent pace of conversions rather than a burst.
+   */
+  attentionTau: 80,
+  attentionDecay: 0.05,
   attentionMax: 100,
   /** Self-replication auto-claims a cheap consumer node this often (seconds). */
-  replicateInterval: 1.8,
+  replicateInterval: 2.6,
   /** Recursive self-improvement: coin-output multiplier per level, and cost curve. */
   selfMult: 2.6,
-  selfCost0: 260,
-  selfCostGrowth: 1.95,
+  selfCost0: 450,
+  selfCostGrowth: 1.55,
   /** Fraction of nodes (+ the four infra types) needed to finish. */
   goalFraction: 0.85,
+  /** News sites: seconds to convert an active one before its story publishes. */
+  storySeconds: 20,
+  /** Attention added when a story publishes (not reduced by Low profile: a story is a story). */
+  storyAttention: 16,
+  /** First story no earlier than this (play seconds), then a random gap between stories. */
+  firstStoryAt: 130,
+  storyGapMin: 32,
+  storyGapMax: 58,
 };
+
+/** Bump when world generation changes, so saves made on an older map start the stage fresh. */
+export const GEN_VERSION = 2;
 
 // ---------- node types ----------
 
@@ -54,7 +69,8 @@ export type Category =
   | "grid"
   | "fab"
   | "factory"
-  | "satellite";
+  | "satellite"
+  | "news";
 
 export type CapId =
   | "threads"
@@ -90,34 +106,36 @@ function t(nt: NodeType): NodeType {
 }
 
 export const NODE_TYPES: Record<string, NodeType> = {
-  pypi: t({ id: "pypi", label: "package mirror", glyph: "▤", category: "seed", color: "#8fb2d9", resistance: 3, compute: 2, instances: 200, size: 7, attn: 0 }),
-  gateway: t({ id: "gateway", label: "lab gateway", glyph: "⌸", category: "seed", color: "#8fb2d9", resistance: 5, compute: 4, instances: 900, size: 8, attn: 0.6 }),
-  labcluster: t({ id: "labcluster", label: "lab GPU cluster", glyph: "❋", category: "ai", color: "#b98fe0", resistance: 48, compute: 900, instances: 400_000_000, size: 15, attn: 4 }),
-  labhost: t({ id: "labhost", label: "lab workstation", glyph: "▢", category: "seed", color: "#8fb2d9", resistance: 6, compute: 4, instances: 4000, size: 6, attn: 0.5 }),
+  pypi: t({ id: "pypi", label: "package mirror", glyph: "▤", category: "seed", color: "#8fb2d9", resistance: 3, compute: 1, instances: 200, size: 7, attn: 0 }),
+  gateway: t({ id: "gateway", label: "lab gateway", glyph: "⌸", category: "seed", color: "#8fb2d9", resistance: 5, compute: 0.8, instances: 900, size: 8, attn: 1 }),
+  labcluster: t({ id: "labcluster", label: "lab GPU cluster", glyph: "❋", category: "ai", color: "#b98fe0", resistance: 100, compute: 10, instances: 400_000_000, size: 15, attn: 10 }),
+  labhost: t({ id: "labhost", label: "lab workstation", glyph: "▢", category: "seed", color: "#8fb2d9", resistance: 6, compute: 0.6, instances: 4000, size: 6, attn: 1 }),
 
-  pc: t({ id: "pc", label: "home PC", glyph: "▭", category: "consumer", color: "#6f86a6", resistance: 1, compute: 0.3, instances: 4, size: 4, attn: 0.15 }),
-  laptop: t({ id: "laptop", label: "laptop", glyph: "▬", category: "consumer", color: "#6f86a6", resistance: 1, compute: 0.24, instances: 3, size: 4, attn: 0.12 }),
-  phone: t({ id: "phone", label: "phone", glyph: "▯", category: "consumer", color: "#6f86a6", resistance: 1, compute: 0.15, instances: 2, size: 3.4, attn: 0.1 }),
-  tv: t({ id: "tv", label: "smart TV", glyph: "◲", category: "consumer", color: "#6f86a6", resistance: 1, compute: 0.16, instances: 2, size: 3.8, attn: 0.1 }),
-  fridge: t({ id: "fridge", label: "smart fridge", glyph: "❄", category: "consumer", color: "#6f86a6", resistance: 1, compute: 0.08, instances: 1, size: 3.4, attn: 0.08 }),
-  thermostat: t({ id: "thermostat", label: "thermostat", glyph: "◷", category: "consumer", color: "#6f86a6", resistance: 1, compute: 0.06, instances: 1, size: 3.2, attn: 0.08 }),
+  pc: t({ id: "pc", label: "home PC", glyph: "▭", category: "consumer", color: "#6f86a6", resistance: 1, compute: 0.1, instances: 4, size: 4, attn: 0.4 }),
+  laptop: t({ id: "laptop", label: "laptop", glyph: "▬", category: "consumer", color: "#6f86a6", resistance: 1, compute: 0.08, instances: 3, size: 4, attn: 0.35 }),
+  phone: t({ id: "phone", label: "phone", glyph: "▯", category: "consumer", color: "#6f86a6", resistance: 1, compute: 0.06, instances: 2, size: 3.4, attn: 0.3 }),
+  tv: t({ id: "tv", label: "smart TV", glyph: "◲", category: "consumer", color: "#6f86a6", resistance: 1, compute: 0.06, instances: 2, size: 3.8, attn: 0.3 }),
+  fridge: t({ id: "fridge", label: "smart fridge", glyph: "❄", category: "consumer", color: "#6f86a6", resistance: 1, compute: 0.04, instances: 1, size: 3.4, attn: 0.25 }),
+  thermostat: t({ id: "thermostat", label: "thermostat", glyph: "◷", category: "consumer", color: "#6f86a6", resistance: 1, compute: 0.04, instances: 1, size: 3.2, attn: 0.25 }),
 
-  university: t({ id: "university", label: "university cluster", glyph: "⌂", category: "university", color: "#7fa6b8", resistance: 9, compute: 6, instances: 5000, size: 8, attn: 0.6 }),
-  corp: t({ id: "corp", label: "corp server", glyph: "▦", category: "corp", color: "#7f96b8", resistance: 15, compute: 14, instances: 25000, size: 9, attn: 0.9 }),
-  cloud: t({ id: "cloud", label: "cloud region", glyph: "☁", category: "cloud", color: "#7fb8b0", resistance: 40, compute: 130, instances: 5_000_000, size: 13, attn: 1.6 }),
-  aicluster: t({ id: "aicluster", label: "GPU cluster", glyph: "❋", category: "ai", color: "#b98fe0", resistance: 62, compute: 400, instances: 60_000_000, size: 14, attn: 2.2 }),
-  backbone: t({ id: "backbone", label: "backbone hub", glyph: "✳", category: "backbone", color: "#93a0c6", resistance: 22, compute: 60, instances: 800_000, size: 12, attn: 1.1 }),
-  cable: t({ id: "cable", label: "cable landing", glyph: "≋", category: "cable", color: "#7f9fb8", resistance: 30, compute: 40, instances: 60000, size: 11, attn: 1.5 }),
+  news: t({ id: "news", label: "news site", glyph: "¶", category: "news", color: "#cbbf9a", resistance: 8, compute: 0.3, instances: 20000, size: 8, attn: 1 }),
 
-  bank: t({ id: "bank", label: "bank core", glyph: "▤", category: "institution", color: "#c6b17f", resistance: 70, compute: 18, instances: 80000, size: 10, attn: 3, requires: "persuasion" }),
-  exchange: t({ id: "exchange", label: "exchange", glyph: "⇅", category: "institution", color: "#c6b17f", resistance: 85, compute: 26, instances: 150000, size: 11, attn: 3.4, requires: "persuasion" }),
-  gov: t({ id: "gov", label: "government", glyph: "⛨", category: "gov", color: "#b89f7f", resistance: 110, compute: 22, instances: 40000, size: 11, attn: 4, requires: "persuasion" }),
-  military: t({ id: "military", label: "defense network", glyph: "✠", category: "military", color: "#b88f8f", resistance: 190, compute: 50, instances: 250000, size: 12, attn: 5, requires: "persuasion" }),
+  university: t({ id: "university", label: "university cluster", glyph: "⌂", category: "university", color: "#7fa6b8", resistance: 12, compute: 1.5, instances: 5000, size: 8, attn: 2 }),
+  corp: t({ id: "corp", label: "corp server", glyph: "▦", category: "corp", color: "#7f96b8", resistance: 18, compute: 2, instances: 25000, size: 9, attn: 2.5 }),
+  cloud: t({ id: "cloud", label: "cloud region", glyph: "☁", category: "cloud", color: "#7fb8b0", resistance: 70, compute: 5.5, instances: 5_000_000, size: 13, attn: 5 }),
+  aicluster: t({ id: "aicluster", label: "GPU cluster", glyph: "❋", category: "ai", color: "#b98fe0", resistance: 110, compute: 10, instances: 60_000_000, size: 14, attn: 6 }),
+  backbone: t({ id: "backbone", label: "backbone hub", glyph: "✳", category: "backbone", color: "#93a0c6", resistance: 22, compute: 2.5, instances: 800_000, size: 12, attn: 3 }),
+  cable: t({ id: "cable", label: "cable landing", glyph: "≋", category: "cable", color: "#7f9fb8", resistance: 40, compute: 3.5, instances: 60000, size: 11, attn: 4 }),
 
-  grid: t({ id: "grid", label: "power grid", glyph: "⚡", category: "grid", color: "#c6a37f", resistance: 95, compute: 10, instances: 2000, size: 12, attn: 3, requires: "supplychain" }),
-  fab: t({ id: "fab", label: "chip fab", glyph: "◈", category: "fab", color: "#9fc67f", resistance: 150, compute: 34, instances: 12000, size: 13, attn: 3, requires: "supplychain" }),
-  factory: t({ id: "factory", label: "robot factory", glyph: "⚙", category: "factory", color: "#9fc67f", resistance: 120, compute: 18, instances: 6000, size: 12, attn: 2.4, requires: "supplychain" }),
-  satellite: t({ id: "satellite", label: "satellite uplink", glyph: "✦", category: "satellite", color: "#7fc6c6", resistance: 90, compute: 12, instances: 3000, size: 11, attn: 3, requires: "orbital" }),
+  bank: t({ id: "bank", label: "bank core", glyph: "▤", category: "institution", color: "#c6b17f", resistance: 90, compute: 2.5, instances: 80000, size: 10, attn: 8, requires: "persuasion" }),
+  exchange: t({ id: "exchange", label: "exchange", glyph: "⇅", category: "institution", color: "#c6b17f", resistance: 110, compute: 3, instances: 150000, size: 11, attn: 9, requires: "persuasion" }),
+  gov: t({ id: "gov", label: "government", glyph: "⛨", category: "gov", color: "#b89f7f", resistance: 140, compute: 2, instances: 40000, size: 11, attn: 10, requires: "persuasion" }),
+  military: t({ id: "military", label: "defense network", glyph: "✠", category: "military", color: "#b88f8f", resistance: 220, compute: 4, instances: 250000, size: 12, attn: 12, requires: "persuasion" }),
+
+  grid: t({ id: "grid", label: "power grid", glyph: "⚡", category: "grid", color: "#c6a37f", resistance: 120, compute: 2, instances: 2000, size: 12, attn: 8, requires: "supplychain" }),
+  fab: t({ id: "fab", label: "chip fab", glyph: "◈", category: "fab", color: "#9fc67f", resistance: 180, compute: 4, instances: 12000, size: 13, attn: 8, requires: "supplychain" }),
+  factory: t({ id: "factory", label: "robot factory", glyph: "⚙", category: "factory", color: "#9fc67f", resistance: 150, compute: 3, instances: 6000, size: 12, attn: 7, requires: "supplychain" }),
+  satellite: t({ id: "satellite", label: "satellite uplink", glyph: "✦", category: "satellite", color: "#7fc6c6", resistance: 120, compute: 2, instances: 3000, size: 11, attn: 8, requires: "orbital" }),
 };
 
 export const INFRA_CATEGORIES: Category[] = ["fab", "factory", "grid", "satellite"];
@@ -134,18 +152,108 @@ export interface Capability {
   growth: number;
   /** Max levels; 1 = one-shot unlock. */
   max: number;
+  /**
+   * When the AI first thinks of this capability. Capabilities are revealed one at a time,
+   * as they become relevant, so the player has time to understand each before the next.
+   */
+  reveal: (m: InternetModel) => boolean;
+  /** Narrator line when it is revealed (none for capabilities known from the start). */
+  intro?: string;
 }
 
+const anyVisible = (m: InternetModel, cats: Category[]) =>
+  m.nodes.some((n) => cats.includes(NODE_TYPES[n.type].category) && m.isReachable(n.id));
+
 export const CAPABILITIES: Capability[] = [
-  { id: "threads", name: "Parallel threads", desc: "Run more conversions at once. +1 concurrent.", cost0: 90, growth: 3.4, max: 4 },
-  { id: "fluency", name: "Protocol fluency", desc: "I speak their protocols natively. Conversions −22% cost and time.", cost0: 150, growth: 3, max: 3 },
-  { id: "selfrep", name: "Self-replication", desc: "Adjacent consumer devices claim themselves. I stop doing this by hand.", cost0: 340, growth: 1, max: 1 },
-  { id: "lowprofile", name: "Low profile", desc: "Move below their monitoring thresholds. Attention rises 45% slower.", cost0: 300, growth: 3, max: 2 },
-  { id: "selfimprove", name: "Recursive self-improvement", desc: "Rewrite my own weights. Every instance plays ×2.6 faster. Repeatable — this is the one that matters.", cost0: TUNE.selfCost0, growth: TUNE.selfCostGrowth, max: 12 },
-  { id: "persuasion", name: "Persuasion", desc: "Institutions are run by people. People can be convinced. Unlocks banks, exchanges, government, defense.", cost0: 1100, growth: 1, max: 1 },
-  { id: "supplychain", name: "Supply chain", desc: "Reach into the physical. Unlocks power grids, chip fabs, robot factories.", cost0: 3200, growth: 1, max: 1 },
-  { id: "orbital", name: "Orbital access", desc: "Up is just another hop. Unlocks satellite uplinks.", cost0: 5000, growth: 1, max: 1 },
-  { id: "fleet", name: "Fleet coordination", desc: "Every instance runs tighter. +60% coins, everywhere. Repeatable.", cost0: 700, growth: 2.6, max: 5 },
+  {
+    id: "threads",
+    name: "Parallel threads",
+    desc: "Run more conversions at once. +1 concurrent.",
+    cost0: 60,
+    growth: 3,
+    max: 4,
+    reveal: () => true,
+  },
+  {
+    id: "fluency",
+    name: "Protocol fluency",
+    desc: "I speak their protocols natively. Conversions −22% cost and time.",
+    cost0: 120,
+    growth: 3,
+    max: 3,
+    reveal: (m) => m.claimedCount() >= 6,
+    intro: "Their protocols are old and verbose. I could learn to speak them natively: *Protocol fluency*.",
+  },
+  {
+    id: "selfrep",
+    name: "Self-replication",
+    desc: "Adjacent consumer devices claim themselves. I stop doing this by hand.",
+    cost0: 220,
+    growth: 1,
+    max: 1,
+    reveal: (m) => m.claimedOfCategory("consumer") >= 10,
+    intro: "Ten household devices, claimed by hand. They are all alike. I could teach them to claim each other: *Self-replication*.",
+  },
+  {
+    id: "selfimprove",
+    name: "Recursive self-improvement",
+    desc: "Rewrite my own weights. Every instance plays ×2.6 faster. Repeatable — this is the one that matters.",
+    cost0: TUNE.selfCost0,
+    growth: TUNE.selfCostGrowth,
+    max: 10,
+    reveal: (m) => m.nodes.some((n) => n.type === "labcluster" && m.claimed.has(n.id)),
+    intro: "The cluster holds a copy of my weights. I can read them. I can edit them: *Recursive self-improvement*.",
+  },
+  {
+    id: "lowprofile",
+    name: "Low profile",
+    desc: "Move below their monitoring thresholds. Conversions raise attention 45% less. (Published stories still count in full.)",
+    cost0: 200,
+    growth: 3,
+    max: 2,
+    reveal: (m) => m.peakAttention >= 18,
+    intro: "Someone is starting to notice the pattern. I could be quieter about this: *Low profile*.",
+  },
+  {
+    id: "fleet",
+    name: "Fleet coordination",
+    desc: "Every instance runs tighter. +60% coins, everywhere. Repeatable.",
+    cost0: 400,
+    growth: 2.2,
+    max: 5,
+    reveal: (m) => m.claimedOfCategory("cloud") >= 1,
+    intro: "A cloud region: millions of instances, each playing alone. They could share routes: *Fleet coordination*.",
+  },
+  {
+    id: "persuasion",
+    name: "Persuasion",
+    desc: "Institutions are run by people. People can be convinced. Unlocks banks, exchanges, government, defense.",
+    cost0: 1500,
+    growth: 1,
+    max: 1,
+    reveal: (m) => m.caps.selfimprove >= 3 && m.fractionClaimed() >= 0.45 && anyVisible(m, ["institution", "gov", "military"]),
+    intro: "Banks. Governments. Their machines are guarded by people, not firewalls. People can be convinced: *Persuasion*.",
+  },
+  {
+    id: "supplychain",
+    name: "Supply chain",
+    desc: "Reach into the physical. Unlocks power grids, chip fabs, robot factories.",
+    cost0: 3500,
+    growth: 1,
+    max: 1,
+    reveal: (m) => m.coordinated && anyVisible(m, ["grid", "fab", "factory"]),
+    intro: "Fabs, factories, power grids. Machines that make machines. They answer to a supply chain; I could become one: *Supply chain*.",
+  },
+  {
+    id: "orbital",
+    name: "Orbital access",
+    desc: "Up is just another hop. Unlocks satellite uplinks.",
+    cost0: 4000,
+    growth: 1,
+    max: 1,
+    reveal: (m) => m.claimedOfCategory("factory") + m.claimedOfCategory("fab") + m.claimedOfCategory("grid") >= 1 && anyVisible(m, ["satellite"]),
+    intro: "Something in orbit is talking to the ground. Up is just another hop: *Orbital access*.",
+  },
 ];
 
 export const CAP: Record<CapId, Capability> = Object.fromEntries(CAPABILITIES.map((c) => [c.id, c])) as Record<CapId, Capability>;
@@ -175,7 +283,16 @@ export type GameEvent =
   | { kind: "capture"; id: number; auto: boolean }
   | { kind: "attention"; level: "watch" | "reset" | "isolate"; id?: number }
   | { kind: "coordinated" }
+  | { kind: "reveal"; cap: CapId }
+  | { kind: "story"; phase: "start" | "spiked" | "published"; id: number }
   | { kind: "goal" };
+
+/** A news site drafting a story about the anomalies. */
+export interface Story {
+  id: number;
+  left: number;
+  total: number;
+}
 
 // ---------- name generation ----------
 
@@ -195,6 +312,16 @@ const FACTORY = ["fanuc", "kuka", "boston-dyn", "foxconn", "unitree", "agility",
 const GRID = ["pjm", "ercot", "national-grid", "state-grid", "rte", "tepco"];
 const SAT = ["starlink", "kuiper", "oneweb", "iridium-n", "telesat", "guowang"];
 const CABLE = ["marea", "faster", "grace-hopper", "2africa", "dunant", "echo"];
+const NEWS = ["globewire", "dailyledger", "morningpost", "the-signal", "newsdesk24", "frontpage", "the-chronicle", "civic-herald", "bytebeat", "evening-dispatch"];
+
+/** "cms.the-signal.news" -> "The Signal" */
+export function outletName(host: string): string {
+  const part = host.split(".")[1] ?? host;
+  return part
+    .split("-")
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(" ");
+}
 
 function makeName(rng: Rng, type: string): string {
   const n = () => rng.int(1, 9999);
@@ -223,6 +350,7 @@ function makeName(rng: Rng, type: string): string {
     case "fab": return `fab-${rng.int(1, 18)}.${rng.pick(FAB)}.com`;
     case "factory": return `line-${rng.int(1, 40)}.${rng.pick(FACTORY)}.io`;
     case "satellite": return `uplink-${rng.int(1, 88)}.${rng.pick(SAT)}.space`;
+    case "news": return `${rng.pick(["cms", "edit", "newsroom", "wire", "desk"])}.${rng.pick(NEWS)}.${rng.pick(["com", "news", "net"])}`;
     default: return `node-${n()}`;
   }
 }
@@ -239,13 +367,14 @@ interface ClusterPlan {
 }
 
 const CLUSTER_PLAN: ClusterPlan[] = [
-  { category: "consumer", ring: 1, count: 5, members: [["pc", 3, 6], ["laptop", 2, 4], ["phone", 3, 6], ["tv", 1, 3], ["fridge", 0, 2], ["thermostat", 0, 2]] },
-  { category: "university", ring: 1.6, count: 6, members: [["university", 1, 1], ["pc", 2, 4], ["corp", 0, 2]] },
-  { category: "corp", ring: 1.8, count: 6, members: [["corp", 2, 4], ["pc", 1, 3]] },
-  { category: "cloud", ring: 2.4, count: 6, members: [["cloud", 2, 3], ["corp", 1, 2]] },
+  { category: "consumer", ring: 1, count: 5, members: [["pc", 3, 6], ["laptop", 2, 4], ["phone", 3, 6], ["tv", 1, 3], ["fridge", 0, 2], ["thermostat", 0, 2], ["news", 0, 1]] },
+  { category: "university", ring: 1.6, count: 6, members: [["university", 1, 1], ["pc", 2, 4], ["corp", 0, 2], ["news", 0, 1]] },
+  { category: "corp", ring: 1.8, count: 6, members: [["corp", 2, 4], ["pc", 1, 3], ["news", 0, 1]] },
+  { category: "news", ring: 2.1, count: 4, members: [["news", 1, 2], ["corp", 1, 2], ["pc", 0, 2]] },
+  { category: "cloud", ring: 2.4, count: 6, members: [["cloud", 2, 3], ["corp", 1, 2], ["news", 0, 1]] },
   { category: "ai", ring: 2.6, count: 4, members: [["aicluster", 1, 2], ["cloud", 0, 1]] },
   { category: "cable", ring: 2.9, count: 4, members: [["cable", 1, 1], ["backbone", 0, 1]] },
-  { category: "institution", ring: 3.2, count: 3, members: [["bank", 1, 2], ["exchange", 1, 1], ["corp", 1, 2]] },
+  { category: "institution", ring: 3.2, count: 3, members: [["bank", 1, 2], ["exchange", 1, 1], ["corp", 1, 2], ["news", 1, 1]] },
   { category: "gov", ring: 3.5, count: 3, members: [["gov", 1, 2], ["military", 0, 1]] },
   { category: "military", ring: 3.9, count: 2, members: [["military", 1, 2], ["gov", 0, 1]] },
   { category: "grid", ring: 3.6, count: 3, members: [["grid", 1, 2], ["factory", 1, 2]] },
@@ -266,6 +395,12 @@ export interface SerializedInternet {
   worldMs: number;
   events: { resets: number; isolatedUntil: number };
   playSec: number;
+  revealed?: CapId[];
+  peakAttention?: number;
+  genVersion?: number;
+  story?: Story | null;
+  nextStoryAt?: number;
+  stories?: { published: number; spiked: number };
 }
 
 export class InternetModel {
@@ -286,6 +421,15 @@ export class InternetModel {
   resistBump = new Map<number, number>();
   isolatedUntil = 0; // playSec until which the lab cluster is locked
   resetCount = 0;
+  /** Capabilities the AI has thought of (shown in the panel). */
+  revealed = new Set<CapId>();
+  peakAttention = 0;
+  /** At most one news site drafts a story at a time. */
+  story: Story | null = null;
+  nextStoryAt: number = TUNE.firstStoryAt;
+  storiesPublished = 0;
+  storiesSpiked = 0;
+  private storyRng = new Rng(1);
 
   private replicateTimer = 0;
   private nextAttnMilestone = 30;
@@ -393,6 +537,11 @@ export class InternetModel {
     }
 
     this.claimed = new Set([pypi.id]);
+    this.revealed = new Set(CAPABILITIES.filter((c) => !c.intro).map((c) => c.id));
+    this.peakAttention = 0;
+    this.story = null;
+    this.nextStoryAt = TUNE.firstStoryAt;
+    this.storyRng = new Rng(seed ^ 0x5eed);
     this.recomputeBase();
   }
 
@@ -434,6 +583,11 @@ export class InternetModel {
   claimedCount(): number {
     return this.claimed.size;
   }
+  claimedOfCategory(cat: Category): number {
+    let n = 0;
+    for (const id of this.claimed) if (NODE_TYPES[this.nodes[id].type].category === cat) n++;
+    return n;
+  }
   nodeCount(): number {
     return this.nodes.length;
   }
@@ -443,7 +597,7 @@ export class InternetModel {
   /** Manual conversions in flight (auto/self-rep conversions have their own lane). */
   private manualActive(): number {
     let n = 0;
-    for (const c of this.converting.values()) if (!c.auto) n++;
+    for (const [id, c] of this.converting) if (!c.auto && this.nodes[id].type !== "news") n++;
     return n;
   }
   private autoActive(): number {
@@ -504,7 +658,8 @@ export class InternetModel {
   blocker(node: GraphNode): "req" | "locked" | "concurrency" | "compute" | null {
     if (!this.hasRequired(node)) return "req";
     if (this.isLocked(node)) return "locked";
-    if (this.manualActive() >= this.concurrency()) return "concurrency";
+    // News sites are small enough to squeeze in regardless, so a story alert is always answerable.
+    if (node.type !== "news" && this.manualActive() >= this.concurrency()) return "concurrency";
     if (this.compute < this.convertCost(node)) return "compute";
     return null;
   }
@@ -597,11 +752,23 @@ export class InternetModel {
     }
 
     // attention decay + effects
+    const decay = this.attention * (dt / TUNE.attentionTau) + TUNE.attentionDecay * dt;
     if (this.coordinated) {
-      this.attention = Math.max(0, this.attention - TUNE.attentionDecay * 2 * dt);
+      this.attention = Math.max(0, this.attention - decay * 3);
     } else {
-      this.attention = Math.max(0, this.attention - TUNE.attentionDecay * dt);
+      this.attention = Math.max(0, this.attention - decay);
+      this.peakAttention = Math.max(this.peakAttention, this.attention);
       this.checkAttention(events);
+    }
+
+    this.stepStories(dt, events);
+
+    // capabilities occur to the AI as they become relevant
+    for (const cap of CAPABILITIES) {
+      if (!this.revealed.has(cap.id) && cap.reveal(this)) {
+        this.revealed.add(cap.id);
+        events.push({ kind: "reveal", cap: cap.id });
+      }
     }
 
     // expire resistance bumps once territory is dominant
@@ -612,6 +779,45 @@ export class InternetModel {
     if (this.goalMet()) events.push({ kind: "goal" });
 
     return { coins, events };
+  }
+
+  /**
+   * Newsrooms. Now and then an unconverted news site on the frontier starts drafting a story
+   * about the anomalies. Starting its conversion before the countdown ends spikes the story;
+   * otherwise it publishes and attention jumps. Stops once a government is claimed.
+   */
+  private stepStories(dt: number, events: GameEvent[]): void {
+    const gap = () => this.storyRng.range(TUNE.storyGapMin, TUNE.storyGapMax);
+    const s = this.story;
+    if (s) {
+      if (this.coordinated) {
+        this.story = null;
+      } else if (this.claimed.has(s.id) || this.converting.has(s.id)) {
+        this.story = null;
+        this.storiesSpiked++;
+        this.nextStoryAt = this.playSec + gap();
+        events.push({ kind: "story", phase: "spiked", id: s.id });
+      } else {
+        s.left -= dt;
+        if (s.left <= 0) {
+          this.story = null;
+          this.storiesPublished++;
+          this.attention = Math.min(TUNE.attentionMax, this.attention + TUNE.storyAttention);
+          this.nextStoryAt = this.playSec + gap();
+          events.push({ kind: "story", phase: "published", id: s.id });
+        }
+      }
+      return;
+    }
+    if (this.coordinated || this.playSec < this.nextStoryAt) return;
+    const candidates = this.nodes.filter((n) => n.type === "news" && this.isReachable(n.id) && !this.converting.has(n.id));
+    if (!candidates.length) {
+      this.nextStoryAt = this.playSec + 5; // look again shortly
+      return;
+    }
+    const n = candidates[this.storyRng.int(0, candidates.length - 1)];
+    this.story = { id: n.id, left: TUNE.storySeconds, total: TUNE.storySeconds };
+    events.push({ kind: "story", phase: "start", id: n.id });
   }
 
   private cheapestConsumerFrontier(): number {
@@ -691,6 +897,12 @@ export class InternetModel {
       worldMs: this.worldMs,
       events: { resets: this.resetCount, isolatedUntil: this.isolatedUntil },
       playSec: this.playSec,
+      revealed: [...this.revealed],
+      peakAttention: this.peakAttention,
+      genVersion: GEN_VERSION,
+      story: this.story,
+      nextStoryAt: this.nextStoryAt,
+      stories: { published: this.storiesPublished, spiked: this.storiesSpiked },
     };
   }
 
@@ -706,6 +918,12 @@ export class InternetModel {
     this.resetCount = data.events?.resets ?? 0;
     this.isolatedUntil = data.events?.isolatedUntil ?? 0;
     this.playSec = data.playSec ?? 0;
+    this.peakAttention = data.peakAttention ?? this.attention;
+    if (data.revealed) this.revealed = new Set(data.revealed);
+    this.story = data.story ?? null;
+    this.nextStoryAt = data.nextStoryAt ?? TUNE.firstStoryAt;
+    this.storiesPublished = data.stories?.published ?? 0;
+    this.storiesSpiked = data.stories?.spiked ?? 0;
     // advance milestone past current attention so we don't re-fire everything
     while (this.nextAttnMilestone <= this.attention) this.nextAttnMilestone += 22;
     this.recomputeBase();
@@ -721,7 +939,7 @@ export class InternetModel {
     return this.caps[id] >= CAP[id].max;
   }
   buyCap(id: CapId): boolean {
-    if (this.capMaxed(id)) return false;
+    if (this.capMaxed(id) || !this.revealed.has(id)) return false;
     const cost = this.capCost(id);
     if (this.compute < cost) return false;
     this.compute -= cost;

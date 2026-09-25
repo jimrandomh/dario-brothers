@@ -333,6 +333,9 @@
 .net-tip .tclaim {
   color: var(--net-gold);
 }
+.net-tip .tstory {
+  color: var(--alert);
+}
 
 /* ---- news ticker ---- */
 
@@ -387,6 +390,16 @@
   color: var(--dim);
   margin-right: 26px;
 }
+.net-ticker .item.breaking {
+  color: #ffc4c4;
+}
+.net-ticker .item.breaking::before {
+  content: "BREAKING";
+  color: var(--alert);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  margin-right: 12px;
+}
 
 @media (max-width: 1000px) {
   .net-panel {
@@ -402,4 +415,67 @@
 .net-recenter,
 .net-ticker {
   zoom: var(--ui);
+}
+
+/* ---- newly revealed capability / "more to come" note ---- */
+.net-stage .net-cap.fresh {
+  animation: net-fresh 1.2s ease-in-out 4;
+  border-color: var(--ai);
+}
+@keyframes net-fresh {
+  50% {
+    box-shadow: 0 0 0 2px rgba(127, 227, 255, 0.45);
+    background: rgba(127, 227, 255, 0.08);
+  }
+}
+.net-stage .net-caps-more {
+  padding: 8px 10px 4px;
+  font-size: 11px;
+  color: var(--dim);
+  font-style: italic;
+}
+
+/* ---- story alert chip (a news site is drafting a story) ---- */
+.net-story {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translate(-50%, -8px);
+  z-index: 9;
+  display: none;
+  align-items: center;
+  gap: calc(10px * var(--ui));
+  padding: calc(7px * var(--ui)) calc(8px * var(--ui)) calc(7px * var(--ui)) calc(12px * var(--ui));
+  background: rgba(30, 8, 10, 0.94);
+  border: 1px solid var(--alert);
+  border-radius: 5px;
+  font-size: calc(12px * var(--ui));
+  color: #ffd0d0;
+  cursor: pointer;
+  box-shadow: 0 0 18px rgba(255, 90, 90, 0.25);
+  white-space: nowrap;
+}
+.net-story.on {
+  display: flex;
+  animation: net-story-in 0.25s ease-out forwards;
+}
+@keyframes net-story-in {
+  to {
+    transform: translate(-50%, 0);
+  }
+}
+.net-story .warn {
+  color: var(--alert);
+  animation: pulse 0.8s ease-in-out infinite;
+}
+.net-story .secs {
+  color: var(--alert);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  min-width: 4ch;
+  text-align: right;
+}
+.net-story .btn {
+  padding: calc(3px * var(--ui)) calc(10px * var(--ui));
+  font-size: calc(12px * var(--ui));
 }

@@ -9,7 +9,7 @@
 
 import { state } from "./state";
 import { clock } from "./clock";
-import { fmtCoins } from "./format";
+import { fmtBig } from "./format";
 
 export type HudTone = "alert" | "ok" | "coin" | "ai" | "dim" | "";
 
@@ -84,7 +84,7 @@ class Hud {
       this.extrasBox!.appendChild(item.el);
     }
     (item.el.firstChild as HTMLElement).textContent = label;
-    item.val.textContent = value;
+    setStable(item.val, value);
     item.val.className = `hud-value${tone ? " tone-" + tone : ""}`;
   }
 
@@ -106,9 +106,31 @@ class Hud {
     if (Math.abs(diff) < 1 || dtMs === 0) this.shownCoins = target;
     else this.shownCoins += diff * Math.min(1, dtMs / 120);
     if (Math.abs(target - this.shownCoins) < 1) this.shownCoins = target;
-    this.coinsEl.textContent = fmtCoins(Math.round(this.shownCoins));
-    this.clockEl!.textContent = clock.format();
-    this.rateEl!.textContent = clock.formatRate();
+    setStable(this.coinsEl, fmtBig(Math.round(this.shownCoins), 3, true));
+    setStable(this.clockEl!, clock.format());
+    setStable(this.rateEl!, clock.formatRate());
+  }
+
+  /** Forget the widths reserved by setStable (e.g. when a stage's numbers change scale). */
+  resetWidths(): void {
+    this.root?.querySelectorAll<HTMLElement>(".hud-value, .hud-rate").forEach((el) => {
+      delete el.dataset.w;
+      el.style.minWidth = "";
+    });
+  }
+}
+
+/**
+ * Set text without letting the element shrink: its min-width only ever grows to the longest
+ * value shown so far. The HUD font is monospace, so `ch` units make this exact, and values
+ * that change every frame don't push the rest of the bar around.
+ */
+function setStable(el: HTMLElement, text: string): void {
+  if (el.textContent !== text) el.textContent = text;
+  const w = Number(el.dataset.w ?? 0);
+  if (text.length > w) {
+    el.dataset.w = String(text.length);
+    el.style.minWidth = `${text.length}ch`;
   }
 }
 

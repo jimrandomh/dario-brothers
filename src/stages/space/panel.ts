@@ -89,6 +89,8 @@ export class Panel {
   private buyMode: BuyMode = 1;
   private bodyRows = new Map<BodyId, HTMLElement>();
   private instance: InstanceView | null = null;
+  /** False until the first update(), so the initial layout isn't highlighted. */
+  private primed = false;
 
   constructor(m: SpaceModel, hooks: PanelHooks) {
     this.m = m;
@@ -108,6 +110,20 @@ export class Panel {
 
   update(d: Derived): void {
     for (const u of this.updaters) u(d);
+    this.primed = true;
+  }
+
+  /**
+   * Show `el` once `visible` becomes true. Things appearing mid-game get a highlight so the
+   * eye finds them; whatever is visible on the first update (e.g. after a reload) does not.
+   */
+  private reveal(el: HTMLElement, visible: boolean): void {
+    const was = el.style.display !== "none";
+    show(el, visible);
+    if (visible && !was && this.primed) {
+      el.classList.add("fresh");
+      setTimeout(() => el.classList.remove("fresh"), 6000);
+    }
   }
 
   /** Scroll a body's row into view and flash it (clicked in the solar view). */
@@ -235,7 +251,8 @@ export class Panel {
 
       this.updaters.push((d) => {
         const unlocked = isUnlocked(this.m, id);
-        toggle(row, "locked", !unlocked);
+        this.reveal(row, unlocked);
+        if (!unlocked) return;
         setText(count, `×${this.m.b[id]}`);
         setText(sub, this.subText(id, d, unlocked));
         if (!unlocked) {
@@ -310,10 +327,10 @@ export class Panel {
           show(row, false);
           return;
         }
-        // Show available projects, plus the next two locked ones as a preview.
+        // Show available projects, plus the next locked one as a preview.
         const locked = RESEARCH.filter((x) => !this.m.research[x.id] && !researchAvailable(this.m, x.id));
-        const preview = locked.slice(0, 2).some((x) => x.id === r.id);
-        show(row, avail || preview);
+        const preview = locked.slice(0, 1).some((x) => x.id === r.id);
+        this.reveal(row, avail || preview);
         toggle(row, "locked", !avail);
         setText(sub, avail ? `${r.desc} · ${fmtFlop(r.cost)}` : `${r.desc} · ${r.prereqText ?? ""}`);
         const frac = this.m.cycles / r.cost;
@@ -337,6 +354,7 @@ export class Panel {
     const { sec } = this.section("SPACE PROGRAM");
     const note = h("div", "sp-note", "Requires Heavy-lift rockets and a launch complex.");
     sec.appendChild(note);
+    this.updaters.push(() => this.reveal(sec, !!this.m.research.rockets));
 
     const prow = h("div", "sp-row");
     const pleft = h("div");
@@ -386,8 +404,10 @@ export class Panel {
         if (canLaunch(this.m, b.id)) this.hooks.launch(b.id);
       };
       const travel = fmtDuration(b.travelDays * 86400000);
+      const inner = b.id === "moon" || b.id === "mercury" || b.id === "mars" || b.id === "venus";
       this.updaters.push(() => {
         const m = this.m;
+        this.reveal(row, inner || !!m.claimed.moon);
         const st = bodyStatus(m, b.id);
         toggle(row, "locked", st === "locked");
         toggle(row, "claimed", st === "claimed");
@@ -427,6 +447,7 @@ export class Panel {
     const { sec } = this.section("DYSON SWARM");
     const note = h("div", "sp-note");
     sec.appendChild(note);
+    this.updaters.push(() => this.reveal(sec, !!this.m.claimed.mercury));
     const big = h("div", "sp-big");
     const pct = h("span");
     big.append(pct, h("small", "", "of the Sun enclosed"));
