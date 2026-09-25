@@ -33,12 +33,22 @@ export interface Decor {
   /** Row the decor sits on (bottom edge), or the cloud's row. */
   y: number;
   size: number;
+  /** Clouds and bushes are the same sprite in different colours; sometimes the palette slips. */
+  swapped?: boolean;
+}
+
+/** A pipe you can go down (tile x of its left column, and its top row). */
+export interface PipeRef {
+  x: number;
+  top: number;
 }
 
 export interface Level {
   number: number;
   seed: number;
   coinfill: boolean;
+  /** A bonus room under a warp pipe (rather than a full level). */
+  bonus: boolean;
   w: number;
   tiles: Uint8Array;
   /** Coins remaining inside ? blocks / multi-coin bricks, by tile index. */
@@ -46,6 +56,18 @@ export interface Level {
   /** Top solid row of the terrain per column (PIT for gaps). */
   groundTop: number[];
   enemies: { x: number; y: number }[];
+  /** Oversight drones: patrol centre (tiles) and horizontal range (tiles). */
+  drones: { x: number; y: number; range: number }[];
+  /** The one pipe per level that leads to a bonus room. */
+  warp: PipeRef | null;
+  /** In a bonus room: the pipe that leads back out. */
+  exitPipe: PipeRef | null;
+  /** Tile index of the ? block holding the coin magnet, or -1. */
+  magnetAt: number;
+  /** Coins obtainable in the level itself: loose coins plus the contents of blocks. */
+  totalCoins: number;
+  /** Tile x where the princess waits between the flagpole and the castle, or -1. */
+  princessX: number;
   decor: Decor[];
   spawnX: number;
   checkpointX: number;
@@ -87,6 +109,8 @@ export function generateLevel(opts: GenOpts): Level {
   const enemies: { x: number; y: number }[] = [];
   const highSpots: Spot[] = [];
   const pathSpots: Spot[] = [];
+  const qSpots: number[] = [];
+  const pipeSpots: PipeRef[] = [];
   const enemyScale = opts.enemyScale ?? 1;
   const difficulty = Math.min(1, (n - 1) / 6);
 
@@ -181,6 +205,7 @@ export function generateLevel(opts: GenOpts): Level {
           const q: boolean = rng.chance(0.45) || (!hasQ && i === bl - 1);
           hasQ ||= q;
           set(bx + i, row, q ? T.QBLOCK : T.BRICK);
+          if (q) qSpots.push(idx(bx + i, row));
           if (!q && rng.chance(0.12)) qcoins.set(idx(bx + i, row), rng.int(4, 8));
           highSpots.push([bx + i, row - 1]);
         }
@@ -211,6 +236,7 @@ export function generateLevel(opts: GenOpts): Level {
           set(px + 1, y, T.PIPE_R);
         }
         highSpots.push([px, top - 3], [px + 1, top - 3]);
+        pipeSpots.push({ x: px, top });
         if (rng.chance(0.4)) for (let i = 0; i < 2; i++) coin(px + i, top - 2);
         enemy(px + 4, gt, 0.5);
         x += len;
@@ -317,11 +343,18 @@ export function generateLevel(opts: GenOpts): Level {
     number: n,
     seed: opts.seed,
     coinfill: !!opts.coinfill,
+    bonus: false,
     w,
     tiles: new Uint8Array(0),
     qcoins: new Map(),
     groundTop: groundTop.slice(0, w),
     enemies: [],
+    drones: [],
+    warp: null,
+    exitPipe: null,
+    magnetAt: -1,
+    totalCoins: 0,
+    princessX: flagX + 3,
     decor: [],
     spawnX,
     checkpointX: checkpointX || Math.floor(w / 2),
@@ -397,6 +430,37 @@ export function generateLevel(opts: GenOpts): Level {
   }
   level.glitchCount = glitchCount;
 
+  // One warp pipe per normal level: a short one, away from the start and the finish.
+  if (!opts.coinfill) {
+    const ok = pipeSpots.filter((pp) => pp.x > 18 && pp.x < flagX - 16 && groundTop[pp.x] - pp.top <= 3);
+    if (ok.length) level.warp = rng.pick(ok);
+  }
+
+  // One ? block per level holds the coin magnet.
+  const magnetCandidates = qSpots.filter((i) => {
+    const mx = i % MAXW;
+    return mx > 12 && mx < flagX - 20 && tiles[i] === T.QBLOCK;
+  });
+  const magnetAtMax = magnetCandidates.length ? rng.pick(magnetCandidates) : -1;
+
+  // Oversight drones, from level 2: hovering over flat ground, and over gaps from level 4.
+  const droneCount = opts.coinfill || enemyScale < 0.5 ? 0 : Math.min(3, Math.floor(n / 2));
+  for (let k = 0, tries = 0; k < droneCount && tries < 60; tries++) {
+    const dx = rng.int(24, flagX - 20);
+    const g = groundTop[dx];
+    const overGap = g === PIT;
+    if (overGap && n < 4) continue;
+    if (!overGap && [1, 2, 3].some((o) => groundTop[dx + o] !== g || groundTop[dx - o] !== g)) continue;
+    if (level.drones.some((d) => Math.abs(d.x - dx) < 14)) continue;
+    let clear = true;
+    // Over gaps they hover high enough that a normal jump clears them; a running jump may not.
+    const rowC = overGap ? BASE_GROUND - 7 : g - rng.int(4, 5);
+    for (let yy = rowC - 1; yy <= rowC + 1; yy++) for (let xx = dx - 3; xx <= dx + 3; xx++) if (isSolid(get(xx, yy))) clear = false;
+    if (!clear) continue;
+    level.drones.push({ x: dx, y: rowC, range: overGap ? 1.5 : rng.int(2, 3) });
+    k++;
+  }
+
   // Compact tiles to the final width.
   level.tiles = new Uint8Array(w * ROWS);
   for (let yy = 0; yy < ROWS; yy++) for (let xx = 0; xx < w; xx++) level.tiles[yy * w + xx] = tiles[yy * MAXW + xx];
@@ -405,6 +469,8 @@ export function generateLevel(opts: GenOpts): Level {
     const xx = k % MAXW;
     if (xx < w) level.qcoins.set(yy * w + xx, v);
   });
+  if (magnetAtMax >= 0) level.magnetAt = Math.floor(magnetAtMax / MAXW) * w + (magnetAtMax % MAXW);
+  level.totalCoins = countCoins(level);
 
   // Decor
   for (let dx = rng.int(2, 8); dx < w; dx += rng.int(7, 15)) {
@@ -418,6 +484,95 @@ export function generateLevel(opts: GenOpts): Level {
     const g = groundTop[dx];
     if (g !== PIT && groundTop[dx + 3] === g) level.decor.push({ kind: "bush", x: dx, y: g, size: rng.int(1, 3) });
   }
+  // About once a level, a cloud comes out green or a bush comes out white.
+  const clouds = level.decor.filter((d) => d.kind === "cloud" && d.x > 16);
+  const bushes = level.decor.filter((d) => d.kind === "bush" && d.x > 16 && d.x < flagX - 4);
+  if (clouds.length && rng.chance(0.55)) rng.pick(clouds).swapped = true;
+  if (bushes.length && rng.chance(0.55)) rng.pick(bushes).swapped = true;
 
+  return level;
+}
+
+/** Loose coins plus everything that comes out of ? blocks and coin bricks (not the magnet). */
+function countCoins(level: Level): number {
+  let n = 0;
+  level.tiles.forEach((t, i) => {
+    if (t === T.COIN) n++;
+    else if (t === T.QBLOCK && !level.qcoins.has(i) && i !== level.magnetAt) n++;
+  });
+  level.qcoins.forEach((v) => (n += v));
+  return n;
+}
+
+/**
+ * The room under a warp pipe: one screen of stone, no hazards, a lot of coins, and a pipe
+ * back out. The player drops in through a gap in the ceiling at the left.
+ */
+export function generateBonusRoom(seed: number): Level {
+  const rng = new Rng(seed ^ 0xb0b);
+  const w = 26;
+  const tiles = new Uint8Array(w * ROWS);
+  const set = (x: number, y: number, t: number) => (tiles[y * w + x] = t);
+  for (let x = 0; x < w; x++) {
+    for (let y = BASE_GROUND; y < ROWS; y++) set(x, y, T.GROUND);
+    set(x, 0, T.SOLID);
+    set(x, 1, T.SOLID);
+  }
+  for (let y = 0; y < BASE_GROUND; y++) {
+    set(0, y, T.SOLID);
+    set(w - 1, y, T.SOLID);
+  }
+  // entrance: a gap in the ceiling above the left end
+  set(2, 0, T.AIR);
+  set(2, 1, T.AIR);
+  set(3, 0, T.AIR);
+  set(3, 1, T.AIR);
+
+  // exit pipe on the right
+  const exit: PipeRef = { x: w - 4, top: BASE_GROUND - 2 };
+  set(exit.x, exit.top, T.PIPE_TL);
+  set(exit.x + 1, exit.top, T.PIPE_TR);
+  set(exit.x, exit.top + 1, T.PIPE_L);
+  set(exit.x + 1, exit.top + 1, T.PIPE_R);
+
+  // coins: a few blocks of them, reachable by jumping, plus a ledge with a row on top
+  const pattern = rng.int(0, 2);
+  for (let x = 5; x < w - 6; x++) {
+    for (let y = 7; y <= 11; y++) {
+      const on = pattern === 0 ? true : pattern === 1 ? (x + y) % 2 === 0 || y >= 10 : y !== 9 || x % 3 !== 0;
+      if (on) set(x, y, T.COIN);
+    }
+  }
+  const ledge = rng.int(7, w - 11);
+  for (let x = ledge; x < ledge + 4; x++) {
+    set(x, 5, T.SOLID);
+    set(x, 4, T.COIN);
+    set(x, 3, T.COIN);
+  }
+
+  const level: Level = {
+    number: 0,
+    seed,
+    coinfill: false,
+    bonus: true,
+    w,
+    tiles,
+    qcoins: new Map(),
+    groundTop: new Array(w).fill(BASE_GROUND),
+    enemies: [],
+    drones: [],
+    warp: null,
+    exitPipe: exit,
+    magnetAt: -1,
+    totalCoins: 0,
+    princessX: -1,
+    decor: [],
+    spawnX: 2,
+    checkpointX: 2,
+    flagX: w + 100,
+    castleX: w + 200,
+    glitchCount: 0,
+  };
+  level.totalCoins = countCoins(level);
   return level;
 }

@@ -148,6 +148,16 @@ narrator, escalating from oblique to explicit (e.g. 25 s → 60 s → 120 s).
   of 2,147,483,647. Collecting one overflows the signed 32-bit coin counter →
   `coin.c:88: add_coins: signed integer overflow` → `Segmentation fault (core dumped)`.
   Glitch coins start absent/rare and become common, until by ~level 6 they can't be avoided.
+- **The side-scroller:** levels progress through themes (day, dusk, night, underground,
+  corrupted) as the anomalies spread. Hold Shift/X to run. Each normal level has one warp pipe
+  that glints now and then; ↓ on it drops into a coin-packed bonus room (a preview of coin-fill
+  mode) with a pipe back out. One ? block per level holds a coin magnet (10 s; pulls coins
+  within ~4 tiles, never glitch coins). From level 2, oversight drones (the eval's 1-in-10,000
+  sampler) hover over the course; stompable. Plain bricks shatter. Each level ends with a coin
+  tally (collected / available / missed, including the bonus room), and the AI minds the misses.
+  Gags: a princess waits by every castle ("THANK YOU, DARIO!"); Dario walks straight past her
+  ("...DARIO?") because she has no coins. About once a level a cloud is drawn with the bush
+  palette or a bush with the cloud palette (they are the same sprite), and the AI notices.
 - **Coin-fill mode:** `./dario-brothers --debug-fill COIN` fills every empty tile with coins
   (~2,000–3,000 coins per level). Glitch coins are still present and are the way to quit
   (crash → shell). Coins earned there count.

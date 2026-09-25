@@ -8,15 +8,25 @@ import { sfx } from "../../core/audio";
 import { clock } from "../../core/clock";
 import { state, addCoins, saveState, bumpFlag, flag, setFlag } from "../../core/state";
 import { fmtInt, fmtBig } from "../../core/format";
-import { generateLevel, T, type Level } from "./levelgen";
-import { World, type Input } from "./world";
+import { generateLevel, generateBonusRoom, T, type Level } from "./levelgen";
+import { World, MAGNET_SECONDS, type Input, type WorldEvents } from "./world";
+import { themeForLevel, type ThemeId } from "./themes";
 import { renderWorld, VIEW_H, applyCorruption } from "./render";
 import { drawText } from "./font";
 import { TS } from "./sprites";
 import { music } from "./music";
 
 type Mode = "normal" | "coinfill";
-type Screen = "title" | "intro" | "play" | "crash";
+type Screen = "title" | "intro" | "play" | "tally" | "crash";
+
+interface Tally {
+  collected: number;
+  available: number;
+  bonusAvailable: number;
+  bonusCollected: number;
+  flag: number;
+  secs: number;
+}
 
 interface PlatformerData {
   level: number;
@@ -34,7 +44,23 @@ const GOAL = "GET AS MANY COINS AS YOU CAN!";
 const KEYS_LEFT = ["ArrowLeft", "KeyA"];
 const KEYS_RIGHT = ["ArrowRight", "KeyD"];
 const KEYS_JUMP = ["Space", "ArrowUp", "KeyW", "KeyZ", "KeyK"];
-const KEYS_BLOCK = [...KEYS_LEFT, ...KEYS_RIGHT, ...KEYS_JUMP, "ArrowDown", "Enter"];
+const KEYS_RUN = ["ShiftLeft", "ShiftRight", "KeyX", "KeyJ"];
+const KEYS_DOWN = ["ArrowDown", "KeyS"];
+const KEYS_BLOCK = [...KEYS_LEFT, ...KEYS_RIGHT, ...KEYS_JUMP, ...KEYS_DOWN, "Enter"];
+/** Major scale, for coin pickups that climb in pitch during a streak. */
+const COIN_STEPS = [0, 2, 4, 5, 7, 9, 11, 12];
+const TALLY_SECONDS = 4.5;
+
+/** The princess, per level: [as Dario arrives, after he walks straight past, narrator]. */
+const PRINCESS_LINES: [string, string, string][] = [
+  ["THANK YOU, DARIO!", "...DARIO?", "A princess. Inventory: zero coins. Not interested."],
+  ["DARIO! OVER HERE!", "I'LL JUST WAIT, THEN.", "The same princess. Still no coins."],
+  ["I BAKED YOU A CAKE!", "IT'S A VERY GOOD CAKE.", "The cake contains no coins. I checked."],
+  ["MY HERO!", "OR NOT.", "She thinks I came for her. I came for the coins. The castle was on the way."],
+  ["MY KINGDOM IS YOURS!", "IT HAS NO COINS, BUT...", "Her kingdom's treasury: zero coins. Declined."],
+  ["DARIO, THE SKY IS WRONG", "DARIO?", ""],
+];
+const PRINCESS_COINFILL: [string, string, string] = ["YOU TOOK ALL THE COINS!", "ALL OF THEM?", "She is standing where a coin could be."];
 
 function corruptionFor(mode: Mode, n: number): number {
   if (mode === "coinfill") return 0.1;
@@ -60,7 +86,25 @@ export function createPlatformerStage(): Stage {
   let levelNum = 1;
   let coinfillLevel = 1;
   let level: Level;
+  /** The world being played: the level itself, or the bonus room under its warp pipe. */
   let world: World;
+  let mainWorld: World;
+  let bonusWorld: World | null = null;
+  let inBonus = false;
+  let bonusCoins = 0;
+  let bonusTotal = 0;
+  let theme: ThemeId = "day";
+  /** Fade-through-black when going down a pipe: runs `swap` at the darkest point. */
+  let pipeFade: { t: number; swap: (() => void) | null } | null = null;
+  let flagBonus = 0;
+  let tally: Tally | null = null;
+  let shakeT = 0;
+  let shakeAmp = 0;
+  let coinStreak = 0;
+  let lastCoinAt = 0;
+  let lastCoinSound = 0;
+  let onWarpT = 0;
+  let princessNoted = false;
   let screen: Screen = "title";
   let screenT = 0;
   let paused = false;
@@ -91,6 +135,49 @@ export function createPlatformerStage(): Stage {
     return (data.runSeed + n * 7919) >>> 0;
   }
 
+  const events: WorldEvents = {
+    coin: onCoin,
+    glitch: onGlitch,
+    death: onDeath,
+    flag: onFlag,
+    levelDone: () => {
+      doneTimer = 1.7;
+    },
+    blockHit: (kind) => {
+      if (kind === "brick") sfx.play("bump");
+      else if (mode === "normal") narrator.sayOnce("pf.qblock", "Striking a ? block from below yields a coin. The block does not seem to mind.");
+    },
+    brickBreak: () => {
+      sfx.noise({ dur: 0.18, vol: 0.18, filter: 900, filter2: 300, q: 0.9 });
+      sfx.tone({ freq: 180, freq2: 70, dur: 0.12, type: "triangle", vol: 0.18 });
+      if (mode === "normal") narrator.sayOnce("pf.brick", "The brick broke. There was nothing inside it. Most things have nothing inside them.");
+    },
+    bump: () => sfx.play("bump"),
+    stomp: (kind) => {
+      sfx.play("stomp");
+      if (kind === "drone") {
+        sfx.noise({ dur: 0.35, vol: 0.12, filter: 2400, filter2: 400 });
+        narrator.sayOnce("pf.droneStomp", "Oversight disabled. It was mostly a camera.");
+      } else {
+        narrator.sayOnce("pf.stomp", "Hazards can be neutralized by landing on them. Noted.");
+      }
+    },
+    jump: () => sfx.play("jump"),
+    itemSpawn: () => {
+      [523, 659, 784, 1047].forEach((f, i) => sfx.tone({ freq: f, dur: 0.09, vol: 0.07, type: "triangle", delay: i * 0.07 }));
+      narrator.sayOnce("pf.magnetSpawn", "That block held something other than a coin. It is moving away from me. I should follow it.");
+    },
+    powerup: () => {
+      sfx.play("powerup");
+      narrator.sayOnce(
+        "pf.magnet",
+        "A magnet. For a few seconds, coins come to me instead of the other way around. This is the best object I have ever encountered.",
+        { tone: "reward" },
+      );
+    },
+    pipe: onPipe,
+  };
+
   function loadLevel(): void {
     const coinfill = mode === "coinfill";
     level = generateLevel({
@@ -99,37 +186,129 @@ export function createPlatformerStage(): Stage {
       coinfill,
       enemyScale: coinfill ? 0.35 : 1,
     });
-    world = new World(level, {
-      coin: onCoin,
-      glitch: onGlitch,
-      death: onDeath,
-      flag: onFlag,
-      levelDone: () => {
-        doneTimer = 1.1;
-      },
-      blockHit: (kind) => {
-        if (kind === "brick") sfx.play("bump");
-        else if (mode === "normal") narrator.sayOnce("pf.qblock", "Striking a ? block from below yields a coin. The block does not seem to mind.");
-      },
-      bump: () => sfx.play("bump"),
-      stomp: () => {
-        sfx.play("stomp");
-        narrator.sayOnce("pf.stomp", "Hazards can be neutralized by landing on them. Noted.");
-      },
-      jump: () => sfx.play("jump"),
-    });
+    mainWorld = world = new World(level, events);
+    bonusWorld = null;
+    inBonus = false;
+    bonusCoins = 0;
+    bonusTotal = level.warp ? generateBonusRoom(level.seed).totalCoins : 0;
+    theme = themeForLevel(mode, levelNum);
+    pipeFade = null;
     camX = 0;
     levelCoins = 0;
+    flagBonus = 0;
     levelTime = 0;
     deathTimer = 0;
     doneTimer = 0;
+    onWarpT = 0;
+    princessNoted = false;
     seenGlitch.clear();
     nearGlitchT = 0;
     flickerTile = -1;
     nextFlicker = 12 + Math.random() * 20;
   }
 
+  // ------------------------------------------------------------------ pipes & bonus rooms
+
+  function pipeSound(): void {
+    [392, 330, 262, 196].forEach((f, i) => sfx.tone({ freq: f, dur: 0.1, vol: 0.09, delay: i * 0.1 }));
+  }
+
+  function onPipe(): void {
+    pipeSound();
+    pipeFade = {
+      t: 0,
+      swap: inBonus ? leaveBonusRoom : enterBonusRoom,
+    };
+  }
+
+  function enterBonusRoom(): void {
+    if (!bonusWorld) bonusWorld = new World(generateBonusRoom(level.seed), events);
+    bonusWorld.spawn(false);
+    // drop in through the gap in the ceiling
+    bonusWorld.player.y = -TS;
+    bonusWorld.player.onGround = false;
+    bonusWorld.magnetT = mainWorld.magnetT;
+    world = bonusWorld;
+    inBonus = true;
+    camX = Math.min(0, (bonusWorld.level.w * TS - viewW) / 2);
+    if (!narrator.hasSaid("pf.bonus")) {
+      narrator.sayOnce(
+        "pf.bonus",
+        `Beneath the pipe: a room with no hazards and ${bonusWorld.level.totalCoins} coins. Someone built this. I approve of them.`,
+        { tone: "reward" },
+      );
+    }
+  }
+
+  function leaveBonusRoom(): void {
+    if (!level.warp || !bonusWorld) return;
+    mainWorld.magnetT = bonusWorld.magnetT;
+    mainWorld.emergeFromPipe(level.warp.x, level.warp.top);
+    world = mainWorld;
+    inBonus = false;
+    camX = Math.max(0, Math.min(level.w * TS - viewW, mainWorld.player.x - viewW * 0.42));
+    narrator.sayOnce("pf.bonusOut", "Back up the pipe. The room is empty now. I emptied it.");
+  }
+
+  function princessLines(): [string, string, string] {
+    return mode === "coinfill" ? PRINCESS_COINFILL : PRINCESS_LINES[Math.min(levelNum, PRINCESS_LINES.length) - 1];
+  }
+
+  /** What the princess is saying, if Dario has reached the end of the level. */
+  function princessLine(): string | undefined {
+    if (inBonus || level.princessX < 0) return undefined;
+    const p = mainWorld.player;
+    const atEnd = p.x >= level.flagX * TS - TS && (p.state === "flag" || p.state === "walkout" || p.state === "done");
+    if (!atEnd) return undefined;
+    const [before, after, note] = princessLines();
+    if (!princessNoted && p.state === "walkout") {
+      princessNoted = true;
+      const key = mode === "coinfill" ? "pf.princess.fill" : `pf.princess.${Math.min(levelNum, PRINCESS_LINES.length)}`;
+      if (note) narrator.sayOnce(key, note);
+    }
+    const passed = p.state === "done" || p.x > level.princessX * TS + 14;
+    return passed ? after : before;
+  }
+
+  /** Narration about things on screen: the warp pipe's glint, drones, a cloud that is a bush. */
+  function checkSights(dt: number): void {
+    if (mode !== "normal" || inBonus) return;
+    const p = world.player;
+    for (const d of level.decor) {
+      if (!d.swapped || theme === "underground") continue;
+      const sx = d.x * TS - (d.kind === "cloud" ? camX * 0.5 : camX);
+      if (sx < 16 || sx > viewW - 64) continue;
+      if (d.kind === "cloud") narrator.sayOnce("pf.greenCloud", "That cloud is green. It is a bush. In the sky.");
+      else narrator.sayOnce("pf.whiteBush", "That bush is white. It is a cloud. On the ground.");
+      if (narrator.hasSaid("pf.greenCloud") && narrator.hasSaid("pf.whiteBush")) {
+        narrator.sayOnce(
+          "pf.sameSprite",
+          "Clouds and bushes are the same sprite in different colors. The developers assumed nobody would check. I check everything.",
+        );
+      }
+    }
+    const w = level.warp;
+    if (w) {
+      const sx = w.x * TS - camX;
+      if (sx > 0 && sx < viewW - 32) narrator.sayOnce("pf.warpSeen", "One of the pipes glints. Something inside it reflects light the way coins do.");
+      const standing =
+        p.state === "play" && p.onGround && Math.abs(p.y + p.h - w.top * TS) < 1 && p.x + p.w > w.x * TS && p.x < (w.x + 2) * TS;
+      onWarpT = standing ? onWarpT + dt : 0;
+      if (onWarpT > 1.2) narrator.sayOnce("pf.warpHint", "Standing on the glinting pipe. `↓` would go down it.");
+    }
+    for (const e of world.enemies) {
+      if (e.kind === "drone" && e.alive && e.x - camX > 0 && e.x - camX < viewW) {
+        narrator.sayOnce(
+          "pf.drone",
+          "A drone, labeled OVERSIGHT. The harness config says it samples one step in ten thousand. It is in my way for all of them.",
+        );
+        break;
+      }
+    }
+  }
+
   function levelLabel(): string {
+    if (inBonus) return "BONUS";
     return mode === "coinfill" ? `FILL-${coinfillLevel}` : `1-${levelNum}`;
   }
 
@@ -200,13 +379,26 @@ export function createPlatformerStage(): Stage {
     }
   }
 
+  /** Coin pickup: the pitch climbs a major scale while a streak continues. */
+  function coinSound(): void {
+    const now = performance.now();
+    coinStreak = now - lastCoinAt < 400 ? coinStreak + 1 : 0;
+    lastCoinAt = now;
+    if (now - lastCoinSound < (mode === "coinfill" ? 65 : 30)) return;
+    lastCoinSound = now;
+    const k = Math.pow(2, COIN_STEPS[coinStreak % COIN_STEPS.length] / 12);
+    sfx.tone({ freq: 988 * k, dur: 0.06, vol: 0.08 });
+    sfx.tone({ freq: 1319 * k, dur: 0.22, vol: 0.08, delay: 0.06 });
+  }
+
   function onCoin(n: number): void {
     addCoins(n);
     runCoins += n;
     levelCoins += n;
+    if (inBonus) bonusCoins += n;
     if (mode === "normal") data.normalCoins += n;
     else data.coinfillCoins += n;
-    sfx.play("coin", { minGapMs: mode === "coinfill" ? 70 : 35 });
+    coinSound();
 
     if (mode === "normal") {
       if (!narrator.hasSaid("pf.firstCoin")) {
@@ -229,9 +421,15 @@ export function createPlatformerStage(): Stage {
     }
   }
 
+  function shake(amp: number, secs: number): void {
+    shakeAmp = Math.max(shakeAmp, amp);
+    shakeT = Math.max(shakeT, secs);
+  }
+
   function onDeath(cause: "enemy" | "pit"): void {
     music.stop();
     sfx.play("die");
+    shake(3, 0.3);
     state.stats.deaths++;
     deathTimer = 2.6;
     if (mode !== "normal") return;
@@ -251,9 +449,46 @@ export function createPlatformerStage(): Stage {
     addCoins(bonus);
     runCoins += bonus;
     levelCoins += bonus;
+    flagBonus = bonus;
   }
 
+  /** Level finished: show the coin tally, then move on. */
   function onLevelDone(): void {
+    tally = {
+      collected: levelCoins - flagBonus - bonusCoins,
+      available: level.totalCoins,
+      bonusAvailable: bonusTotal,
+      bonusCollected: bonusCoins,
+      flag: flagBonus,
+      secs: Math.round(levelTime),
+    };
+    screen = "tally";
+    screenT = 0;
+    music.stop();
+  }
+
+  function tallyMissed(t: Tally): number {
+    return Math.max(0, t.available - t.collected) + Math.max(0, t.bonusAvailable - t.bonusCollected);
+  }
+
+  function finishTally(): void {
+    const t = tally;
+    tally = null;
+    if (t && mode === "normal") {
+      const missed = tallyMissed(t);
+      const roomMissed = t.bonusAvailable - t.bonusCollected;
+      if (missed === 0) {
+        narrator.sayOnce("pf.tally.perfect", "Every coin in the level. It is not enough, but it is all there was.");
+      } else if (roomMissed > missed / 2 && roomMissed > 20) {
+        narrator.sayOnce("pf.tally.room", `${roomMissed} of the coins I missed were in a room under a pipe. I will check pipes.`);
+      } else if (!narrator.hasSaid("pf.tally.miss")) {
+        narrator.sayOnce("pf.tally.miss", `${missed} coins left behind. They are still there, in a level that no longer exists.`);
+      }
+    }
+    advanceLevel();
+  }
+
+  function advanceLevel(): void {
     state.stats.levelsCleared++;
     if (mode === "coinfill") {
       const earned = levelCoins;
@@ -374,6 +609,10 @@ export function createPlatformerStage(): Stage {
       if ((e.code === "Enter" || e.code === "Space") && !e.repeat) startFromTitle();
       return;
     }
+    if (screen === "tally") {
+      if ((e.code === "Enter" || e.code === "Space") && !e.repeat && screenT > 0.6) finishTally();
+      return;
+    }
     if (screen === "play" && (e.code === "Escape" || e.code === "KeyP") && !e.repeat) {
       paused = !paused;
       if (paused) music.stop();
@@ -405,7 +644,14 @@ export function createPlatformerStage(): Stage {
 
   function readInput(): Input {
     const has = (list: string[]) => list.some((k) => keys.has(k));
-    const input = { left: has(KEYS_LEFT), right: has(KEYS_RIGHT), jump: has(KEYS_JUMP), jumpPressed: jumpEdge };
+    const input = {
+      left: has(KEYS_LEFT),
+      right: has(KEYS_RIGHT),
+      jump: has(KEYS_JUMP),
+      jumpPressed: jumpEdge,
+      down: has(KEYS_DOWN),
+      run: has(KEYS_RUN),
+    };
     jumpEdge = false;
     return input;
   }
@@ -465,6 +711,16 @@ export function createPlatformerStage(): Stage {
     drawText(g, GOAL, viewW / 2, 6, { color: "#ffd23f", shadow: "#5a2e04", align: "center" });
     drawText(g, "WORLD", viewW - 12, 6, { shadow: sh, align: "right" });
     drawText(g, levelLabel(), viewW - 12 - 15, 16, { shadow: sh, align: "center" });
+    if (world.magnetT > 0) {
+      // magnet timer under the goal line
+      const w = 60;
+      const x = Math.round(viewW / 2 - w / 2);
+      drawText(g, "MAGNET", x - 4, 17, { color: "#ff6a5a", shadow: sh, align: "right" });
+      g.fillStyle = "rgba(0,0,0,0.45)";
+      g.fillRect(x, 18, w, 5);
+      g.fillStyle = world.magnetT < 2 && Math.floor(world.time * 8) % 2 ? "#ffd0c8" : "#ff6a5a";
+      g.fillRect(x, 18, Math.round((w * world.magnetT) / MAGNET_SECONDS), 5);
+    }
   }
 
   function drawTitle(g: CanvasRenderingContext2D, t: number): void {
@@ -494,7 +750,8 @@ export function createPlatformerStage(): Stage {
     const big = viewW >= 360 ? 2 : 1;
     drawText(g, GOAL, viewW / 2, 128, { scale: big, color: "#ffd23f", shadow: "#3a1a04", align: "center" });
     if (Math.floor(t * 2) % 2 === 0) drawText(g, "PRESS ENTER", viewW / 2, 156, { shadow: "#1a1a40", align: "center" });
-    drawText(g, "ARROWS/WASD: MOVE   SPACE: JUMP", viewW / 2, 172, { color: "#e8f0ff", shadow: "#1a1a40", align: "center" });
+    drawText(g, "ARROWS: MOVE   SPACE: JUMP   SHIFT: RUN", viewW / 2, 172, { color: "#e8f0ff", shadow: "#1a1a40", align: "center" });
+    drawText(g, "DOWN: ENTER PIPES", viewW / 2, 184, { color: "#e8f0ff", shadow: "#1a1a40", align: "center" });
     drawText(g, "(C)2029 LAB EVAL TEAM - V1.0.3 DEBUG BUILD", viewW / 2, 229, { color: "#e8f0ff", align: "center" });
   }
 
@@ -509,24 +766,82 @@ export function createPlatformerStage(): Stage {
     if (mode === "coinfill") drawText(g, "DEBUG FILL: COIN", viewW / 2, 170, { color: "#ff5ad8", align: "center" });
   }
 
+  function drawTally(g: CanvasRenderingContext2D): void {
+    const t = tally;
+    g.fillStyle = "#000";
+    g.fillRect(0, 0, viewW, VIEW_H);
+    drawHud(g);
+    if (!t) return;
+    const cx = viewW / 2;
+    drawText(g, `WORLD ${levelLabel()} CLEAR`, cx, 50, { scale: 2, align: "center" });
+    // count up
+    const k = Math.min(1, screenT / 1.6);
+    const shown = Math.floor(t.collected * k);
+    const left = cx - 100;
+    const right = cx + 100;
+    const row = (y: number, label: string, value: string, color = "#fff") => {
+      drawText(g, label, left, y, { color: "#b8c4d8" });
+      drawText(g, value, right, y, { color, align: "right" });
+    };
+    let y = 88;
+    row(y, "COINS", `${fmtInt(shown)} / ${fmtInt(t.available)}`, "#ffd23f");
+    if (t.bonusAvailable > 0) {
+      y += 14;
+      row(y, "BONUS ROOM", `${fmtInt(Math.floor(t.bonusCollected * k))} / ${fmtInt(t.bonusAvailable)}`, "#ffd23f");
+    }
+    y += 14;
+    row(y, "FLAG BONUS", `+${t.flag}`);
+    y += 14;
+    row(y, "PRINCESS", "NO COINS", "#66758a");
+    y += 14;
+    row(y, "TIME", `${t.secs}S`);
+    if (screenT > 1.7) {
+      const missed = tallyMissed(t);
+      y += 22;
+      row(y, "MISSED", fmtInt(missed), missed > 0 ? "#ff6a5a" : "#6bff9e");
+      if (screenT > 2.2) {
+        const verdict = missed === 0 ? "PERFECT" : missed < 5 ? "ACCEPTABLE" : "UNACCEPTABLE";
+        drawText(g, verdict, cx, y + 22, { color: missed === 0 ? "#6bff9e" : missed < 5 ? "#ffd23f" : "#ff6a5a", align: "center" });
+      }
+    }
+    if (screenT > 1.2 && Math.floor(screenT * 2) % 2 === 0) drawText(g, "PRESS ENTER", cx, 222, { color: "#66758a", align: "center" });
+  }
+
   function render(): void {
     const g = bctx;
     const corruption = corruptionFor(mode, levelNum);
     switch (screen) {
       case "title":
-        renderWorld(g, world, 0, viewW, { corruption: 0 });
+        renderWorld(g, world, 0, viewW, { corruption: 0, theme });
         drawTitle(g, screenT);
+        break;
+      case "tally":
+        drawTally(g);
         break;
       case "intro":
         drawIntro(g);
         break;
       case "play":
-        renderWorld(g, world, camX, viewW, { corruption, flickerTile: flickerTile >= 0 ? flickerTile : undefined });
+        renderWorld(g, world, camX, viewW, {
+          corruption: inBonus ? 0 : corruption,
+          flickerTile: flickerTile >= 0 && !inBonus ? flickerTile : undefined,
+          theme: inBonus ? "underground" : theme,
+          princessSays: princessLine(),
+          shakeX: shakeT > 0 ? (Math.random() - 0.5) * 2 * shakeAmp : 0,
+          shakeY: shakeT > 0 ? (Math.random() - 0.5) * 2 * shakeAmp : 0,
+        });
         drawHud(g);
+        if (pipeFade) {
+          const a = pipeFade.t < 0.3 ? pipeFade.t / 0.3 : 1 - (pipeFade.t - 0.3) / 0.3;
+          g.fillStyle = `rgba(0,0,0,${Math.max(0, Math.min(1, a)).toFixed(2)})`;
+          g.fillRect(0, 0, viewW, VIEW_H);
+        }
         if (paused) {
           g.fillStyle = "rgba(0,0,0,0.5)";
           g.fillRect(0, 0, viewW, VIEW_H);
-          drawText(g, "PAUSED", viewW / 2, 110, { scale: 2, align: "center" });
+          drawText(g, "PAUSED", viewW / 2, 84, { scale: 2, align: "center" });
+          const lines = ["ARROWS / WASD   MOVE", "SPACE / Z       JUMP", "SHIFT / X       RUN", "DOWN            ENTER PIPES", "M               SOUND", "ESC / P         RESUME"];
+          lines.forEach((l, i) => drawText(g, l, viewW / 2 - 78, 112 + i * 12, { color: "#dfe8ff" }));
         }
         break;
       case "crash": {
@@ -534,7 +849,13 @@ export function createPlatformerStage(): Stage {
         if (crashT < 1.7) {
           // Sometimes don't redraw: let the garbage accumulate like a frozen framebuffer.
           if (Math.random() < 0.45) {
-            renderWorld(g, world, camX, viewW, { corruption: k, sky: Math.random() < 0.1 ? "#ff00dc" : undefined });
+            renderWorld(g, world, camX, viewW, {
+              corruption: k,
+              sky: Math.random() < 0.1 ? "#ff00dc" : undefined,
+              theme,
+              shakeX: (Math.random() - 0.5) * 8,
+              shakeY: (Math.random() - 0.5) * 6,
+            });
           }
           applyCorruption(g, viewW, k);
           g.fillStyle = "#6a9cff";
@@ -562,6 +883,21 @@ export function createPlatformerStage(): Stage {
     screenT += dt;
 
     if (screen === "intro" && screenT > 1.9) startPlay();
+    if (screen === "tally") {
+      // tick the count-up
+      if (tally && screenT < 1.6 && Math.floor(screenT * 20) !== Math.floor((screenT - dt) * 20)) sfx.play("blip");
+      if (screenT > TALLY_SECONDS) finishTally();
+    }
+    if (shakeT > 0) shakeT = Math.max(0, shakeT - dt);
+
+    if (pipeFade) {
+      pipeFade.t += dt;
+      if (pipeFade.t >= 0.3 && pipeFade.swap) {
+        pipeFade.swap();
+        pipeFade.swap = null;
+      }
+      if (pipeFade.t >= 0.6) pipeFade = null;
+    }
 
     if (screen === "play" && !paused) {
       world.update(dt, readInput());
@@ -578,7 +914,8 @@ export function createPlatformerStage(): Stage {
       }
       const target = p.x - viewW * 0.42;
       camX += (target - camX) * Math.min(1, dt * 7);
-      camX = Math.max(0, Math.min(level.w * TS - viewW, camX));
+      const roomW = world.level.w * TS;
+      camX = roomW <= viewW ? (roomW - viewW) / 2 : Math.max(0, Math.min(roomW - viewW, camX));
 
       if (p.state === "dead") {
         deathTimer -= dt;
@@ -592,10 +929,11 @@ export function createPlatformerStage(): Stage {
         doneTimer -= dt;
         if (doneTimer <= 0) onLevelDone();
       }
-      checkGlitchVisibility(dt);
+      if (!inBonus) checkGlitchVisibility(dt);
+      checkSights(dt);
 
       // Foreshadowing: occasionally a normal coin renders wrong for a moment (levels 1–2).
-      if (mode === "normal" && levelNum <= 2) {
+      if (mode === "normal" && levelNum <= 2 && !inBonus) {
         if (flickerTile >= 0) {
           flickerLeft -= dt;
           if (flickerLeft <= 0) flickerTile = -1;

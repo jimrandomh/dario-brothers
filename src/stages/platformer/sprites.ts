@@ -1,6 +1,7 @@
 // Procedural pixel art. Everything is drawn once into small cached canvases.
 
 import { Rng } from "../../core/rng";
+import { THEMES, type Theme, type ThemeId } from "./themes";
 
 export const TS = 16;
 
@@ -190,44 +191,52 @@ const BUG_FRAMES: Record<string, string[]> = {
 
 // ---------------------------------------------------------------- tiles
 
-function drawGroundTile(top: boolean, seed: number): HTMLCanvasElement {
+function drawGroundTile(top: boolean, seed: number, th: Theme): HTMLCanvasElement {
   const c = makeCanvas(TS, TS);
   const g = c.getContext("2d")!;
   const r = new Rng(seed);
-  g.fillStyle = "#a0521c";
+  const [base, dark, light] = th.dirt;
+  g.fillStyle = base;
   g.fillRect(0, 0, TS, TS);
   // speckles
   for (let i = 0; i < 14; i++) {
-    g.fillStyle = r.chance(0.5) ? "#7a3a10" : "#c06a2c";
+    g.fillStyle = r.chance(0.5) ? dark : light;
     g.fillRect(r.int(0, 15), r.int(top ? 5 : 0, 15), r.chance(0.3) ? 2 : 1, 1);
   }
-  if (top) {
-    g.fillStyle = "#3aa83a";
+  if (top && th.grass) {
+    const [blade, hi, root] = th.grass;
+    g.fillStyle = blade;
     g.fillRect(0, 0, TS, 4);
-    g.fillStyle = "#8ee05a";
+    g.fillStyle = hi;
     g.fillRect(0, 0, TS, 1);
-    g.fillStyle = "#1f7a24";
+    g.fillStyle = root;
     for (let x = 0; x < TS; x++) {
       const d = (x * 7 + seed) % 5 < 2 ? 5 : 4;
       g.fillRect(x, 4, 1, d - 4 + 1);
     }
+  } else if (top) {
+    // bare stone: a lighter lip
+    g.fillStyle = light;
+    g.fillRect(0, 0, TS, 2);
+    g.fillStyle = dark;
+    g.fillRect(0, 2, TS, 1);
   }
   return c;
 }
 
-function drawBrick(): HTMLCanvasElement {
+function drawBrick(th: Theme): HTMLCanvasElement {
   const c = makeCanvas(TS, TS);
   const g = c.getContext("2d")!;
-  g.fillStyle = "#3c1c08";
+  const [mortar, body, hi] = th.brick;
+  g.fillStyle = mortar;
   g.fillRect(0, 0, TS, TS);
-  g.fillStyle = "#b85820";
   for (let row = 0; row < 4; row++) {
     const off = row % 2 ? 4 : 0;
     for (let bx = -8; bx < TS; bx += 8) {
       const x0 = bx + off;
-      g.fillStyle = "#b85820";
+      g.fillStyle = body;
       g.fillRect(x0, row * 4, 7, 3);
-      g.fillStyle = "#e8904c";
+      g.fillStyle = hi;
       g.fillRect(x0, row * 4, 7, 1);
     }
   }
@@ -288,18 +297,19 @@ function drawUsed(): HTMLCanvasElement {
   return c;
 }
 
-function drawSolid(): HTMLCanvasElement {
+function drawSolid(th: Theme): HTMLCanvasElement {
   const c = makeCanvas(TS, TS);
   const g = c.getContext("2d")!;
-  g.fillStyle = "#b8783c";
+  const [base, light, dark, inset] = th.solid;
+  g.fillStyle = base;
   g.fillRect(0, 0, TS, TS);
-  g.fillStyle = "#f0c080";
+  g.fillStyle = light;
   g.fillRect(0, 0, TS, 2);
   g.fillRect(0, 0, 2, TS);
-  g.fillStyle = "#6a3a14";
+  g.fillStyle = dark;
   g.fillRect(0, 14, TS, 2);
   g.fillRect(14, 0, 2, TS);
-  g.fillStyle = "#d09050";
+  g.fillStyle = inset;
   g.fillRect(4, 4, 8, 8);
   return c;
 }
@@ -433,24 +443,24 @@ function drawCloud(size: number, fill: string, shade: string, outline: string): 
   return c;
 }
 
-function drawHill(size: number): HTMLCanvasElement {
+function drawHill(size: number, [outline, body]: [string, string]): HTMLCanvasElement {
   const h = 16 + size * 16;
   const w = h * 2 + 8;
   const c = makeCanvas(w, h);
   const g = c.getContext("2d")!;
-  g.fillStyle = "#0e5a1a";
+  g.fillStyle = outline;
   for (let y = 0; y < h; y++) {
     const t = y / h;
     const hw = Math.round((w / 2) * Math.sqrt(t) * 0.98) + 1;
     g.fillRect(w / 2 - hw, y, hw * 2, 1);
   }
-  g.fillStyle = "#2c9a36";
+  g.fillStyle = body;
   for (let y = 1; y < h; y++) {
     const t = y / h;
     const hw = Math.round((w / 2) * Math.sqrt(t) * 0.98) - 1;
     if (hw > 0) g.fillRect(w / 2 - hw, y, hw * 2, 1);
   }
-  g.fillStyle = "#0e5a1a";
+  g.fillStyle = outline;
   const spots = size + 1;
   for (let i = 0; i < spots; i++) {
     const sx = w / 2 + (i - spots / 2 + 0.5) * 12;
@@ -479,43 +489,124 @@ function drawFlag(): HTMLCanvasElement {
   return c;
 }
 
-function drawCastle(): HTMLCanvasElement {
-  const w = 80;
-  const h = 80;
-  const c = makeCanvas(w, h);
+function drawCastle(th: Theme): HTMLCanvasElement {
+  const c = makeCanvas(80, 80);
   const g = c.getContext("2d")!;
-  const brick = drawBrick();
-  // lower body 5 wide x 2 tall, tower 3 wide x 2 tall, crenellations
-  for (let x = 0; x < 5; x++) for (let y = 3; y < 5; y++) g.drawImage(brick, x * 16, y * 16);
+  const brick = drawBrick(th);
+  const merlon = (x: number, y: number) => g.drawImage(brick, 0, 0, 8, 8, x, y, 8, 8);
+  // tower (3 wide, 2 tall) with three merlons on top
   for (let x = 1; x < 4; x++) for (let y = 1; y < 3; y++) g.drawImage(brick, x * 16, y * 16);
-  g.fillStyle = "#3c1c08";
-  for (let x = 0; x < 5; x++) {
-    g.drawImage(brick, x * 16, 40, 16, 8, x * 16, 40, 16, 8);
-  }
-  // crenellations
-  for (let x = 0; x < 5; x++) {
-    g.clearRect(x * 16 + 5, 48, 6, 0);
-  }
-  for (let i = 0; i < 5; i++) g.drawImage(brick, 0, 0, 8, 8, i * 16 + 4, 40, 8, 8);
-  for (let i = 0; i < 3; i++) g.drawImage(brick, 0, 0, 8, 8, 16 + i * 16 + 4, 8, 8, 8);
-  g.clearRect(0, 40, 80, 8);
-  for (let i = 0; i < 5; i++) g.drawImage(brick, 0, 0, 8, 8, i * 16 + 4, 40, 8, 8);
-  g.clearRect(0, 0, 80, 16);
-  for (let i = 0; i < 3; i++) g.drawImage(brick, 0, 0, 8, 8, 16 + i * 16 + 4, 8, 8, 8);
+  for (let i = 0; i < 3; i++) merlon(16 + i * 16 + 4, 8);
+  // base (5 wide, 2 tall), with merlons at the two ends outside the tower
+  for (let x = 0; x < 5; x++) for (let y = 3; y < 5; y++) g.drawImage(brick, x * 16, y * 16);
+  merlon(4, 40);
+  merlon(68, 40);
   // door + windows
   g.fillStyle = "#000";
-  g.fillRect(32, 56, 16, 24);
-  blob(g, 40, 56, 8);
-  g.fillRect(28, 24, 6, 10);
-  g.fillRect(46, 24, 6, 10);
+  g.fillRect(32, 60, 16, 20);
+  blob(g, 40, 60, 8);
+  g.fillRect(26, 24, 6, 10);
+  g.fillRect(48, 24, 6, 10);
   return c;
 }
+
+// ---------------------------------------------------------------- drone & magnet
+
+const DRONE_BODY = [
+  "......KK........",
+  "......KK........",
+  "....OOOOOOO.....",
+  "...OLLLLLLLO....",
+  "..OLLLLLLLLLO...",
+  "..OLLOOOOOLLO...",
+  "..OLLORRWOLLO...",
+  "..OLLORRROLLO...",
+  "..OLLOOOOOLLO...",
+  "..ODDDDDDDDDO...",
+  "...ODDDDDDDO....",
+  "....OOOOOOO.....",
+  "....A.....A.....",
+  "................",
+];
+const DRONE_FRAMES: Record<string, string[]> = {
+  a: [".KKKKKKKKKKKKK..", ...DRONE_BODY, "................"],
+  b: ["....KKKKKK......", ...DRONE_BODY, "................"],
+};
+const DRONE_PAL: Record<string, string> = {
+  K: "#3a4050",
+  O: "#1e2430",
+  L: "#c8d0dc",
+  D: "#7a8494",
+  R: "#ff3a3a",
+  W: "#ffffff",
+  A: "#1e2430",
+};
+
+const MAGNET = [
+  "................",
+  "................",
+  "..WWW....WWW....",
+  "..WWW....WWW....",
+  "..RRR....RRR....",
+  "..RRR....RRR....",
+  "..RRR....RRR....",
+  "..RRR....RRR....",
+  "..RRRr..rRRR....",
+  "..RRRRRRRRRR....",
+  "...RRRRRRRR.....",
+  "....rrrrrr......",
+  "................",
+  "................",
+  "................",
+  "................",
+];
+const MAGNET_PAL: Record<string, string> = { W: "#e8eef6", R: "#e8342a", r: "#8e1c14" };
+
+// ---------------------------------------------------------------- the princess (no coins)
+
+const PRINCESS = [
+  "......Y.g.Y.....",
+  "......YYYYY.....",
+  ".....HHHHHHH....",
+  "....HHSSSSSHH...",
+  "....HSSKSSKSH...",
+  "....HSSSSSSSH...",
+  "....HSSSrrSSH...",
+  "....HHSSSSSHH...",
+  "...HHHHSSSHHHH..",
+  "...HHPPPPPPPHH..",
+  "....SPPpPPPPS...",
+  "....SPPPPPPPS...",
+  ".....PPpPPPP....",
+  ".....PPPPPPP....",
+  "....PPPPpPPPP...",
+  "....PPPPPPPPP...",
+  "...PPPPPPpPPPP..",
+  "...PPPPPPPPPPP..",
+  "..PPPPpPPPPPPPP.",
+  "..PPPPPPPPPPPPP.",
+  "..ppppppppppppp.",
+];
+const PRINCESS_PAL: Record<string, string> = {
+  Y: "#f8d830",
+  g: "#3ad0ff",
+  H: "#f8d060",
+  S: "#f8c8a0",
+  K: "#202040",
+  r: "#e0506a",
+  P: "#f07ab8",
+  p: "#b8407e",
+};
 
 // ---------------------------------------------------------------- sheet
 
 export interface Sheet {
+  theme: Theme;
   dario: Record<string, { r: HTMLCanvasElement; l: HTMLCanvasElement }>;
   bug: Record<string, HTMLCanvasElement>;
+  drone: Record<string, HTMLCanvasElement>;
+  magnet: HTMLCanvasElement;
+  princess: HTMLCanvasElement;
   ground: HTMLCanvasElement[];
   groundTop: HTMLCanvasElement[];
   brick: HTMLCanvasElement;
@@ -532,10 +623,13 @@ export interface Sheet {
   castle: HTMLCanvasElement;
 }
 
-let sheet: Sheet | null = null;
+type Shared = Omit<Sheet, "theme" | "ground" | "groundTop" | "brick" | "solid" | "clouds" | "bushes" | "hills" | "castle">;
 
-export function getSheet(): Sheet {
-  if (sheet) return sheet;
+let shared: Shared | null = null;
+const sheets = new Map<ThemeId, Sheet>();
+
+function getShared(): Shared {
+  if (shared) return shared;
   const dario: Sheet["dario"] = {};
   for (const [k, rows] of Object.entries(DARIO_FRAMES)) {
     const r = fromMap(rows);
@@ -543,23 +637,40 @@ export function getSheet(): Sheet {
   }
   const bug: Sheet["bug"] = {};
   for (const [k, rows] of Object.entries(BUG_FRAMES)) bug[k] = fromMap(rows);
-  sheet = {
+  const drone: Sheet["drone"] = {};
+  for (const [k, rows] of Object.entries(DRONE_FRAMES)) drone[k] = fromMap(rows, DRONE_PAL);
+  shared = {
     dario,
     bug,
-    ground: [0, 1, 2, 3].map((i) => drawGroundTile(false, 11 + i * 7)),
-    groundTop: [0, 1, 2, 3].map((i) => drawGroundTile(true, 5 + i * 13)),
-    brick: drawBrick(),
+    drone,
+    magnet: fromMap(MAGNET, MAGNET_PAL),
+    princess: fromMap(PRINCESS, PRINCESS_PAL),
     qblock: [0, 1, 2].map(drawQBlock),
     used: drawUsed(),
-    solid: drawSolid(),
     pipe: { TL: drawPipe("TL"), TR: drawPipe("TR"), L: drawPipe("L"), R: drawPipe("R") },
     coin: [10, 7, 2, 7].map(drawCoinFrame),
     glitch: Array.from({ length: 8 }, (_, i) => drawGlitchFrame(i * 977 + 3)),
-    clouds: [1, 2, 3].map((s) => drawCloud(s, "#ffffff", "#bfe0ff", "#1c2c6a")),
-    bushes: [1, 2, 3].map((s) => drawCloud(s, "#5ad85a", "#2c9a36", "#0e5a1a")),
-    hills: [1, 2].map(drawHill),
     flag: drawFlag(),
-    castle: drawCastle(),
   };
+  return shared;
+}
+
+export function getSheet(themeId: ThemeId = "day"): Sheet {
+  const cached = sheets.get(themeId);
+  if (cached) return cached;
+  const th = THEMES[themeId];
+  const sheet: Sheet = {
+    ...getShared(),
+    theme: th,
+    ground: [0, 1, 2, 3].map((i) => drawGroundTile(false, 11 + i * 7, th)),
+    groundTop: [0, 1, 2, 3].map((i) => drawGroundTile(true, 5 + i * 13, th)),
+    brick: drawBrick(th),
+    solid: drawSolid(th),
+    clouds: th.clouds ? [1, 2, 3].map((n) => drawCloud(n, ...th.clouds!)) : [],
+    bushes: th.bushes ? [1, 2, 3].map((n) => drawCloud(n, ...th.bushes!)) : [],
+    hills: th.hills ? [1, 2].map((n) => drawHill(n, th.hills!)) : [],
+    castle: drawCastle(th),
+  };
+  sheets.set(themeId, sheet);
   return sheet;
 }
