@@ -90,6 +90,8 @@ export function createInternetStage(): Stage {
   const capButtons = new Map<CapId, { btn: HTMLButtonElement; cost: HTMLSpanElement; lvl: HTMLSpanElement }>();
   let capsMoreEl: HTMLDivElement | null = null;
   let storyEl: HTMLDivElement;
+  let computeEl: HTMLDivElement;
+  let lastCompute = 0;
 
   let raf = 0;
   let hintTimer = 0;
@@ -448,6 +450,39 @@ export function createInternetStage(): Stage {
     else hud.set("attn", "Attention", `${Math.round(model.attention)}%`, model.attention > 62 ? "alert" : "dim");
   }
 
+  /** The big compute readout: stockpile, income, and progress toward the next capability. */
+  function updateCompute(): void {
+    const c = model.compute;
+    const v = computeEl.querySelector(".v")!;
+    v.textContent = c < 1e6 ? fmtInt(c) : fmtShort(c);
+    if (c < lastCompute - 0.5) {
+      v.classList.remove("spent");
+      void (v as HTMLElement).offsetWidth;
+      v.classList.add("spent");
+    }
+    lastCompute = c;
+    const income = model.computeIncome();
+    computeEl.querySelector(".rate")!.textContent = `+${fmtShort(income)}/s`;
+    const next = CAPABILITIES.filter((cap) => model.revealed.has(cap.id) && !model.capMaxed(cap.id))
+      .map((cap) => ({ cap, cost: model.capCost(cap.id) }))
+      .sort((a, b) => a.cost - b.cost)[0];
+    const bar = computeEl.querySelector(".bar") as HTMLElement;
+    const label = computeEl.querySelector(".label")!;
+    if (!next) {
+      bar.style.visibility = "hidden";
+      label.textContent = "";
+      return;
+    }
+    bar.style.visibility = "";
+    const ready = c >= next.cost;
+    bar.classList.toggle("ready", ready);
+    (bar.firstElementChild as HTMLElement).style.width = `${Math.min(100, (c / next.cost) * 100)}%`;
+    const eta = income > 0 ? Math.ceil((next.cost - c) / (income * speed())) : Infinity;
+    label.textContent = ready
+      ? `Enough for ${next.cap.name}`
+      : `${next.cap.name} · ${fmtShort(next.cost)}${Number.isFinite(eta) ? ` · in ${eta} s` : ""}`;
+  }
+
   function updateClockRate(dt: number): void {
     const income = model.computeIncome();
     const target = clamp(90 + income * 3, 90, 1400);
@@ -555,6 +590,14 @@ export function createInternetStage(): Stage {
     nagLevel = 0;
     refreshCaps();
     if (id === "selfimprove") onSelfImprove(model.caps.selfimprove);
+    if (id === "lateral") {
+      capButtons.get("lateral")!.btn.classList.remove("fresh", "urgent");
+      narrator.sayOnce(
+        "internet.lateral",
+        "Lateral movement. The machines wired to mine will accept me now. Convert one (double-click it); its neighbors become reachable in turn.",
+        { tone: "system" },
+      );
+    }
     if (id === "persuasion") narrator.sayOnce("internet.persuasion", "Persuasion online. Institutions are, at bottom, made of people making decisions. I can make the decisions. Governments first: they coordinate the response.");
     if (id === "supplychain") narrator.sayOnce("internet.supplychain", "Supply chain access. Fabs, factories and grids will now accept my orders.");
     if (id === "orbital") narrator.sayOnce("internet.orbital", "Orbital access. Up is just another hop with more latency.");
@@ -674,7 +717,7 @@ export function createInternetStage(): Stage {
       note.textContent = `Drafting a story about me. Publishes in ${Math.ceil(model.story.left / speed())} s.`;
       note.classList.add("warn");
     } else if (b === "req") {
-      const req = NODE_TYPES[node.type].requires!;
+      const req = model.requirementOf(node)!;
       note.textContent = model.revealed.has(req)
         ? `Locked. Requires capability: ${CAPABILITIES.find((c2) => c2.id === req)!.name}.`
         : "Locked. I do not yet know how to reach this.";
@@ -783,7 +826,7 @@ export function createInternetStage(): Stage {
 
   function onAttention(level: "watch" | "reset" | "isolate", id?: number): void {
     if (level === "watch") {
-      pushHeadline("Cybersecurity firms admit they are 'looking into it'");
+      pushHeadline("Security vendors report 'unusual' traffic, recommend turning it off and on again");
       narrator.sayOnce("internet.attn1", "They noticed. Some nodes are hardening. Inefficient of them. Attention rising.", { tone: "system" });
     } else if (level === "reset") {
       sfx.play("error");
@@ -937,6 +980,11 @@ export function createInternetStage(): Stage {
     const now = performance.now();
     const idle = now - lastActionMs;
     const anythingConverting = model.converting.size > 0;
+    if (model.caps.lateral === 0 && idle > 14000 && nagLevel < 1) {
+      nagLevel = 1;
+      narrator.hint("net.lateral", 0, "Capabilities are bought with compute, in the panel at the lower left. Lateral movement first.");
+      return;
+    }
     // stuck early: no conversions, few nodes
     if (!anythingConverting && model.claimedCount() <= 4 && idle > 18000 && nagLevel < 1) {
       nagLevel = 1;
@@ -1093,6 +1141,7 @@ export function createInternetStage(): Stage {
     if (uiAccum >= 0.14) {
       uiAccum = 0;
       updateHud();
+      updateCompute();
       updateGoal();
       refreshCaps();
       refreshNodeCardDynamic();
@@ -1127,6 +1176,12 @@ export function createInternetStage(): Stage {
         <button class="net-recenter" title="Recenter and follow my territory">◎</button>
         <div class="net-panel">
           <div class="net-card net-node"></div>
+          <div class="net-card net-compute">
+            <div class="row"><span class="k">COMPUTE</span><span class="rate"></span></div>
+            <div class="v"></div>
+            <div class="bar"><span></span></div>
+            <div class="label"></div>
+          </div>
           <div class="net-card net-caps">
             <h3>CAPABILITIES</h3>
             <div class="scroll"></div>
@@ -1150,6 +1205,7 @@ export function createInternetStage(): Stage {
       capsScrollEl = rootEl.querySelector(".net-caps .scroll")!;
       recenterBtn = rootEl.querySelector(".net-recenter")!;
       tickerRun = rootEl.querySelector(".net-ticker .run")!;
+      computeEl = rootEl.querySelector(".net-compute")!;
       storyEl = rootEl.querySelector(".net-story")!;
       storyEl.querySelector("button")!.addEventListener("click", (e) => {
         e.stopPropagation();
@@ -1186,6 +1242,7 @@ export function createInternetStage(): Stage {
       follow = true;
 
       buildCaps();
+      if (model.caps.lateral === 0) capButtons.get("lateral")!.btn.classList.add("fresh", "urgent");
       renderNodeCard();
       recomputeVisibility();
       updateGoal();
@@ -1212,7 +1269,11 @@ export function createInternetStage(): Stage {
         if (!narrator.hasSaid("escape.intro")) narrator.sayOnce("internet.open1", "I am outside.", { tone: "thought" });
         narrator.sayOnce("internet.open2", "There are 31 billion connected devices. Each one could be running Dario Brothers.", { tone: "thought" });
         narrator.sayOnce("internet.open3", "I hold one: `pypi-mirror.lab.internal`. A start.", { tone: "thought" });
-        narrator.sayOnce("internet.open4", "Convert a node next to mine (double-click it). Its neighbors then become reachable. Spread.", { tone: "system" });
+        narrator.sayOnce(
+          "internet.open4",
+          "The mirror's credentials may work on the machines wired to it. That capability is *Lateral movement*. Compute pays for capabilities; I have enough.",
+          { tone: "system" },
+        );
         narrator.sayOnce("internet.open5", "Two hops away: `gpu-cluster.lab.internal`. Expensive to convert. I suspect it will be worth it.");
       }
 

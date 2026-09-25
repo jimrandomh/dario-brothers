@@ -51,7 +51,7 @@ function play(seed: number, p: Profile, verbose = false): { min: number; won: bo
     return v;
   };
 
-  const capPriority: CapId[] = ["selfimprove", "threads", "selfrep", "persuasion", "supplychain", "orbital", "fluency", "fleet", "lowprofile"];
+  const capPriority: CapId[] = ["lateral", "selfimprove", "threads", "selfrep", "persuasion", "supplychain", "orbital", "fluency", "fleet", "lowprofile"];
 
   let next = 0;
   let won = false;

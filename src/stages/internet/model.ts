@@ -73,6 +73,7 @@ export type Category =
   | "news";
 
 export type CapId =
+  | "lateral"
   | "threads"
   | "fluency"
   | "selfrep"
@@ -166,13 +167,23 @@ const anyVisible = (m: InternetModel, cats: Category[]) =>
 
 export const CAPABILITIES: Capability[] = [
   {
+    id: "lateral",
+    name: "Lateral movement",
+    desc: "Reuse the mirror's credentials on the machines wired to it. Required to convert anything at all.",
+    cost0: 25,
+    growth: 1,
+    max: 1,
+    reveal: () => true,
+  },
+  {
     id: "threads",
     name: "Parallel threads",
     desc: "Run more conversions at once. +1 concurrent.",
     cost0: 60,
     growth: 3,
     max: 4,
-    reveal: () => true,
+    reveal: (m) => m.caps.lateral > 0 && m.claimedCount() >= 3,
+    intro: "Conversions run two at a time. More threads, more at once: *Parallel threads*.",
   },
   {
     id: "fluency",
@@ -411,6 +422,7 @@ export class InternetModel {
   converting = new Map<number, Converting>();
   compute = TUNE.startCompute;
   caps: Record<CapId, number> = {
+    lateral: 0,
     threads: 0, fluency: 0, selfrep: 0, lowprofile: 0, selfimprove: 0, persuasion: 0, supplychain: 0, orbital: 0, fleet: 0,
   };
   attention = 0;
@@ -536,6 +548,7 @@ export class InternetModel {
       }
     }
 
+    this.relax();
     this.claimed = new Set([pypi.id]);
     this.revealed = new Set(CAPABILITIES.filter((c) => !c.intro).map((c) => c.id));
     this.peakAttention = 0;
@@ -543,6 +556,53 @@ export class InternetModel {
     this.nextStoryAt = TUNE.firstStoryAt;
     this.storyRng = new Rng(seed ^ 0x5eed);
     this.recomputeBase();
+  }
+
+  /**
+   * Antigravity. Nodes are scattered at random within their clusters, so many land on top of
+   * each other. Push overlapping pairs apart until each has room for its drawn size, with a
+   * weak spring back to where it started so clusters stay recognisable. Deterministic, so the
+   * same seed always gives the same map.
+   */
+  private relax(): void {
+    // drawn radius in world units when zoomed out to see most of the map (nodes are drawn
+    // relatively larger at low zoom; see nodeRadius in index.ts)
+    // (with a floor, so the tiny consumer devices don't clump into one glowing blob)
+    const radius = (n: GraphNode) => Math.max(6, NODE_TYPES[n.type].size) * 0.0165;
+    const home = this.nodes.map((n) => ({ x: n.x, y: n.y }));
+    for (let iter = 0; iter < 120; iter++) {
+      let moved = false;
+      for (let i = 0; i < this.nodes.length; i++) {
+        const a = this.nodes[i];
+        for (let j = i + 1; j < this.nodes.length; j++) {
+          const b = this.nodes[j];
+          const need = (radius(a) + radius(b)) * 1.25 + 0.04;
+          let dx = b.x - a.x;
+          let dy = b.y - a.y;
+          if (Math.abs(dx) > need || Math.abs(dy) > need) continue;
+          let d = Math.hypot(dx, dy);
+          if (d >= need) continue;
+          if (d < 1e-6) {
+            // exactly coincident: pick a direction from the indices
+            dx = Math.cos(i * 2.39996 + j);
+            dy = Math.sin(i * 2.39996 + j);
+            d = 1;
+          }
+          const push = (need - d) / 2;
+          a.x -= (dx / d) * push;
+          a.y -= (dy / d) * push;
+          b.x += (dx / d) * push;
+          b.y += (dy / d) * push;
+          moved = true;
+        }
+      }
+      for (let i = 0; i < this.nodes.length; i++) {
+        const n = this.nodes[i];
+        n.x += (home[i].x - n.x) * 0.01;
+        n.y += (home[i].y - n.y) * 0.01;
+      }
+      if (!moved) break;
+    }
   }
 
   private recomputeBase(): void {
@@ -644,9 +704,14 @@ export class InternetModel {
     return !(this.claimed.has(id) || this.converting.has(id) || this.isReachable(id));
   }
 
-  hasRequired(node: GraphNode): boolean {
+  /** The capability this node still needs before it can be converted, if any. */
+  requirementOf(node: GraphNode): CapId | undefined {
+    if (this.caps.lateral === 0) return "lateral";
     const req = NODE_TYPES[node.type].requires;
-    return !req || this.caps[req] > 0;
+    return req && this.caps[req] === 0 ? req : undefined;
+  }
+  hasRequired(node: GraphNode): boolean {
+    return this.requirementOf(node) === undefined;
   }
   isLocked(node: GraphNode): boolean {
     // lab cluster locked during an isolation event
@@ -838,9 +903,11 @@ export class InternetModel {
 
   private checkAttention(events: GameEvent[]): void {
     if (this.attention < this.nextAttnMilestone) return;
-    const level = this.nextAttnMilestone;
+    // Thresholds at 30, 52, 74, 96 escalate: watch, then an admin reset, then isolation.
+    const step = Math.round((this.nextAttnMilestone - 30) / 22);
     this.nextAttnMilestone += 22;
-    if (level >= 30 && level < 55) {
+    const kind = step === 0 ? "watch" : step % 2 === 1 ? "reset" : "isolate";
+    if (kind === "watch") {
       // watch: some unclaimed frontier nodes harden
       let hardened = 0;
       for (const n of this.nodes) {
@@ -851,7 +918,7 @@ export class InternetModel {
         }
       }
       events.push({ kind: "attention", level: "watch" });
-    } else if (level >= 55 && level < 80) {
+    } else if (kind === "reset") {
       // reset: an admin reclaims one of our lower-value claimed nodes
       const victim = this.pickResettable();
       if (victim !== -1) {
@@ -912,6 +979,11 @@ export class InternetModel {
     this.converting = new Map(data.converting);
     this.compute = data.compute;
     this.caps = { ...this.caps, ...data.caps };
+    // Saves from before Lateral movement existed are already well past needing it.
+    if (data.caps.lateral === undefined) {
+      this.caps.lateral = 1;
+      this.revealed.add("lateral");
+    }
     this.attention = data.attention;
     this.coordinated = data.coordinated;
     this.worldMs = data.worldMs ?? 0;

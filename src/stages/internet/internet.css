@@ -479,3 +479,71 @@
   padding: calc(3px * var(--ui)) calc(10px * var(--ui));
   font-size: calc(12px * var(--ui));
 }
+
+/* ---- compute: the spendable resource, front and centre ---- */
+.net-compute {
+  padding: 8px 12px 10px;
+}
+.net-compute .row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+.net-compute .k {
+  font-size: 10px;
+  letter-spacing: 0.2em;
+  color: var(--dim);
+  font-weight: 600;
+}
+.net-compute .rate {
+  font-size: 12px;
+  color: var(--ai);
+  font-variant-numeric: tabular-nums;
+}
+.net-compute .v {
+  font-size: 30px;
+  font-weight: 600;
+  line-height: 1.15;
+  color: var(--ai);
+  font-variant-numeric: tabular-nums;
+  text-shadow: 0 0 14px rgba(127, 227, 255, 0.35);
+}
+.net-compute .v.spent {
+  animation: net-spent 0.5s ease-out;
+}
+@keyframes net-spent {
+  from {
+    color: #ff9a9a;
+    text-shadow: 0 0 14px rgba(255, 90, 90, 0.5);
+  }
+}
+.net-compute .bar {
+  margin-top: 5px;
+  height: 4px;
+  background: #131923;
+  border-radius: 2px;
+  overflow: hidden;
+}
+.net-compute .bar span {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: var(--ai);
+  transition: width 0.15s linear;
+}
+.net-compute .bar.ready span {
+  background: var(--coin);
+}
+.net-compute .label {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* a capability you must buy before anything else works */
+.net-stage .net-cap.urgent {
+  animation: net-fresh 1.2s ease-in-out infinite;
+}
