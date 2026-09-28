@@ -92,7 +92,8 @@ previous one has had time to sink in. The rules of thumb:
 
 - **Reveal, don't list.** Capabilities (network) and buildings/sections (space) appear when
   they become relevant, each introduced by a narrator line and briefly highlighted. The
-  network stage's gates chain as a story: lab cluster → self-improvement → persuasion (after
+  network stage's gates chain as a story: Lateral movement (bought before the first conversion,
+  so the player meets the capability panel first) → lab cluster → self-improvement → persuasion (after
   deeper self-improvement and half the map) → supply chain (after a government falls) →
   orbital (after the first fab/factory/grid).
 - **Paybacks of ~40–60 s.** A node's or building's cost should take tens of seconds of income

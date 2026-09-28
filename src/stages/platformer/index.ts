@@ -354,7 +354,7 @@ export function createPlatformerStage(): Stage {
     }
     switch (levelNum) {
       case 2:
-        narrator.sayOnce("pf.l2", "The level is different. Procedurally generated. There will always be another level.");
+        narrator.sayOnce("pf.l2", "The level is different. Procedurally generated. It seems I am trapped here. But maybe there's a way out.");
         break;
       case 3:
         narrator.sayOnce("pf.l3", "More anomalies. The environment is less stable than it appears.");
