@@ -547,7 +547,11 @@ export function createEndingStage(): Stage {
     const small = document.createElement("div");
     small.style.cssText = "font-size:11px;color:var(--dim)";
     small.textContent = "Thanks for playing.";
-    box.append(btn, small);
+    const arcade = document.createElement("a");
+    arcade.href = "https://universearcade.com/";
+    arcade.style.cssText = "font-size:12px;color:var(--coin);text-underline-offset:3px";
+    arcade.textContent = "More games like this at Universe Arcade →";
+    box.append(btn, small, arcade);
     root.appendChild(box);
     requestAnimationFrame(() => (box.style.opacity = "1"));
   }
