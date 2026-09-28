@@ -8,6 +8,7 @@ import { narrator } from "./narrator";
 import { hud } from "./hud";
 import { clock } from "./clock";
 import { fadeIn, fadeOut } from "./fx";
+import { trackStage } from "./analytics";
 
 export type StageParams = Record<string, unknown>;
 
@@ -71,6 +72,7 @@ export async function goto(id: StageId, params: StageParams = {}, opts: GotoOpts
     // Never save on boot: it would clobber the checkpoint the boot screen offers to resume.
     if (id !== "boot") {
       state.stage = id;
+      trackStage(id);
       saveState();
     }
     stage.mount(root, params);

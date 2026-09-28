@@ -81,6 +81,9 @@ Palette (CSS vars in `src/style.css`): `--bg #07090d`, `--panel #0d1118`, `--pan
   `unmount` must remove window listeners, cancel rAF loops and timers.
 - **fx.ts** — `fadeOut`, `fadeIn`, `sleep`, `shake(el)`.
 - **rng.ts** — `new Rng(seed)` with `next range int chance pick weighted shuffle`.
+- **analytics.ts** — Google Analytics landmark events (`game_start`, `stage_reached {stage}`,
+  `game_complete`), sent once per run from `goto()` and the boot screen. Recorded in
+  `analytics.*` flags; never sent from the dev server or debug URLs.
 - **stages/platformer/instanceView.ts** — `mountInstanceView(container, {label, seed, speed})`
   returns `{destroy()}`: a tiny self-playing coin-fill Dario Brothers. Use it as decoration
   wherever the AI is "running instances" (internet node details, space compute panel...).

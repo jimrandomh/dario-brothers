@@ -8,6 +8,7 @@ import { narrator } from "../core/narrator";
 import { sfx } from "../core/audio";
 import { hasSave, loadState, resetState, state } from "../core/state";
 import { fmtCoins } from "../core/format";
+import { trackGameStart } from "../core/analytics";
 
 const STAGE_NAMES: Record<string, string> = {
   platformer: "dario-brothers",
@@ -51,6 +52,7 @@ export function createBootStage(): Stage {
   function start() {
     cleanupInput();
     sfx.play("blip");
+    trackGameStart();
     void goto("platformer", { mode: "normal" }, { fadeMs: 700 });
   }
 
